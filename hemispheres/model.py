@@ -105,6 +105,13 @@ def lm_loss(model: GPT, inputs: mx.array, targets: mx.array) -> mx.array:
     return nn.losses.cross_entropy(logits, targets, reduction="mean")
 
 
+def masked_lm_loss(model: GPT, inputs: mx.array, targets: mx.array, weights: mx.array) -> mx.array:
+    """Mean cross-entropy over the target positions where weights == 1."""
+    logits = model(inputs).astype(mx.float32)
+    ce = nn.losses.cross_entropy(logits, targets, reduction="none")
+    return (ce * weights).sum() / mx.maximum(weights.sum(), 1.0)
+
+
 def train_flops_per_token(cfg: GPTConfig, seq_len: int) -> float:
     """Training FLOPs per token, PaLM-style: 6N for the matmuls + 12·L·d·T for attention.
 

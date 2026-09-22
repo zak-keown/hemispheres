@@ -1,0 +1,164 @@
+"""Train a reasoner on a synthetic world.
+
+  # The three arms, trained from scratch on world A
+  python -m hemispheres.train --arm dense   --data data/world-a --out runs/dense-a
+  python -m hemispheres.train --arm lookup  --data data/world-a --out runs/lookup-a
+  python -m hemispheres.train --arm context --data data/world-a --out runs/context-a
+
+  # Updating a dense model is training: continue from its weights on new facts
+  python -m hemispheres.train --arm dense --data data/world-b --init runs/dense-a --mix bios=1 \\
+      --steps 2000 --out runs/dense-a-to-b
+  python -m hemispheres.train --arm dense --data data/world-a --edits 100 --init runs/dense-a \\
+      --mix edit_facts=1,edit_qa=1 --steps 200 --out runs/dense-a-k100
+
+Every `--eval-every` steps the model is scored by exact match on held-out
+questions (see evaluate.py). A run can be resumed with --resume.
+"""
+
+import argparse
+import json
+import math
+import time
+from dataclasses import asdict
+from functools import partial
+from pathlib import Path
+
+import mlx.core as mx
+import mlx.nn as nn
+import mlx.optimizers as optim
+
+from . import checkpoint
+from .data import ARMS, ExampleSampler, Packer, WorldData, parse_mix
+from .evaluate import evaluate, format_summary
+from .model import GPT, SIZES, config_for, masked_lm_loss
+from .synth.render import Tokenizer
+
+
+def make_optimizer(args) -> optim.Optimizer:
+    warmup = min(args.warmup, args.steps // 10)
+    decay = optim.cosine_decay(args.lr, max(args.steps - warmup, 1), end=args.lr * args.min_lr_frac)
+    schedule = optim.join_schedules([optim.linear_schedule(0.0, args.lr, warmup), decay], [warmup]) if warmup else decay
+    return optim.AdamW(learning_rate=schedule, betas=(0.9, 0.95), weight_decay=args.weight_decay)
+
+
+def log(run: Path, record: dict) -> None:
+    with open(run / "metrics.jsonl", "a") as f:
+        f.write(json.dumps(record) + "\n")
+
+
+def train(args) -> None:
+    run = Path(args.out)
+    resuming = args.resume and (run / "checkpoints" / "latest" / "state.pkl").exists()
+    if run.exists() and any(run.iterdir()) and not resuming:
+        raise SystemExit(f"{run} is not empty; pass --resume to continue it or choose another --out")
+    run.mkdir(parents=True, exist_ok=True)
+
+    data = WorldData(args.data, args.edits)
+    tok = Tokenizer(data.vocab)
+    mix = parse_mix(args.mix, args.arm)
+
+    if args.init:
+        model, init_config = checkpoint.load_model(args.init, args.init_checkpoint)
+        if init_config["arm"] != args.arm:
+            raise SystemExit(f"--init run was trained as {init_config['arm']!r}, not {args.arm!r}")
+        model_cfg = model.cfg
+    else:
+        model_cfg = config_for(args.size, vocab_size=64 * math.ceil(len(tok) / 64))
+        model = GPT(model_cfg)
+    model.set_dtype(getattr(mx, args.dtype))
+    mx.eval(model.parameters())
+
+    config = {**{k: v for k, v in vars(args).items() if k != "resume"}, "mix": mix, "model": asdict(model_cfg),
+              "params": model.num_params(), "vocab": len(tok)}
+    (run / "config.json").write_text(json.dumps(config, indent=2))  # a resume records its new settings
+
+    optimizer = make_optimizer(args)
+    sampler = ExampleSampler(data, args.arm, mix, args.seed)
+    packer = Packer(sampler, tok, args.batch_size, args.seq_len)
+    start = 0
+    if resuming:
+        model.load_weights(str(run / "checkpoints" / "latest" / "model.safetensors"))
+        state = checkpoint.load_optimizer_state(run, "latest", optimizer)
+        start = state["step"]
+        sampler.set_state(state["sampler"])
+        print(f"resumed {run} at step {start}")
+
+    loss_and_grad = nn.value_and_grad(model, partial(masked_lm_loss, model))
+    state = [model.state, optimizer.state]
+
+    @partial(mx.compile, inputs=state, outputs=state)
+    def step_fn(inputs, targets, weights):
+        loss, grads = loss_and_grad(inputs, targets, weights)
+        grads, grad_norm = optim.clip_grad_norm(grads, args.grad_clip)
+        optimizer.update(model, grads)
+        return loss, grad_norm
+
+    def run_eval(step: int) -> None:
+        summary, _ = evaluate(model, tok, data, args.arm, args.eval_sets.split(","), args.eval_n, args.seed)
+        log(run, {"step": step, "eval": summary})
+        print(format_summary(summary))
+
+    print(f"{args.arm}: {model.num_params() / 1e6:.1f}M params, {len(tok)} tokens, mix {mix}, "
+          f"{args.steps} steps × {args.batch_size}×{args.seq_len}")
+    batch = packer.batch()
+    t_last, trained_tokens, losses = time.perf_counter(), 0, []
+    for step in range(start, args.steps):
+        loss, grad_norm = step_fn(*batch)
+        mx.async_eval(loss, grad_norm, state)
+        trained_tokens += int(batch[2].sum().item())
+        batch = packer.batch()  # build the next batch while this step runs
+        losses.append(loss.item())
+
+        if (step + 1) % args.log_every == 0 or step + 1 == args.steps:
+            dt = time.perf_counter() - t_last
+            rec = {"step": step + 1, "loss": sum(losses) / len(losses), "grad_norm": grad_norm.item(),
+                   "lr": float(optimizer.learning_rate), "tok_per_s": args.batch_size * args.seq_len * len(losses) / dt,
+                   "trained_frac": trained_tokens / (args.batch_size * args.seq_len * len(losses))}
+            log(run, rec)
+            print(f"step {rec['step']:>6} loss {rec['loss']:.4f} gnorm {rec['grad_norm']:.2f} lr {rec['lr']:.2e} "
+                  f"{rec['tok_per_s']:,.0f} tok/s ({rec['trained_frac']:.0%} trained)", flush=True)
+            t_last, trained_tokens, losses = time.perf_counter(), 0, []
+        if args.save_every and (step + 1) % args.save_every == 0:
+            checkpoint.save(run, "latest", model, optimizer, {"step": step + 1, "sampler": sampler.state()})
+        if args.eval_every and (step + 1) % args.eval_every == 0 and step + 1 != args.steps:
+            run_eval(step + 1)
+            t_last = time.perf_counter()
+
+    checkpoint.save(run, "final", model)
+    checkpoint.save(run, "latest", model, optimizer, {"step": args.steps, "sampler": sampler.state()})
+    if args.eval_every:
+        run_eval(args.steps)
+    print(f"saved {run}/checkpoints/final")
+
+
+def main() -> None:
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--arm", choices=sorted(ARMS), required=True)
+    p.add_argument("--data", required=True, help="built world directory (synth/build.py)")
+    p.add_argument("--out", required=True, help="run directory")
+    p.add_argument("--edits", type=int, default=0, help="train on the world with this many edits applied")
+    p.add_argument("--mix", default=None, help="sources and weights, e.g. bios=0.5,qa=0.5 (default: per arm)")
+    p.add_argument("--init", default=None, help="run directory to initialise weights from")
+    p.add_argument("--init-checkpoint", default="final")
+    p.add_argument("--size", choices=sorted(SIZES), default="small")
+    p.add_argument("--dtype", choices=("float32", "bfloat16"), default="float32")
+    p.add_argument("--steps", type=int, default=10_000)
+    p.add_argument("--batch-size", type=int, default=64)
+    p.add_argument("--seq-len", type=int, default=256)
+    p.add_argument("--lr", type=float, default=1e-3)
+    p.add_argument("--min-lr-frac", type=float, default=0.1)
+    p.add_argument("--warmup", type=int, default=500)
+    p.add_argument("--weight-decay", type=float, default=0.1)
+    p.add_argument("--grad-clip", type=float, default=1.0)
+    p.add_argument("--log-every", type=int, default=100)
+    p.add_argument("--eval-every", type=int, default=2000, help="0 disables evaluation")
+    p.add_argument("--eval-sets", default="test_id,test_ood,test_1hop_ood")
+    p.add_argument("--eval-n", type=int, default=200, help="questions per hop count per set")
+    p.add_argument("--save-every", type=int, default=2000)
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--resume", action="store_true")
+    train(p.parse_args())
+
+
+if __name__ == "__main__":
+    main()
