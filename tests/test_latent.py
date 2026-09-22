@@ -108,3 +108,88 @@ def test_qa_supervision_is_one_fact_per_hop_ending_at_the_answer(data):
 def test_untrained_latent_model_evaluates(data, model):
     summary, records = evaluate(model, Tokenizer(data.vocab), data, "latent", ["test_id"], n=3)
     assert records and "test_id" in summary
+
+
+def _reference_read(layer, h, keys, store, wte, val_pos):
+    """The direct implementation: project every retrieved token at every position."""
+    import math
+    B, T, D = h.shape
+    H, dh, k, L = layer.n_head, layer.head_dim, layer.cfg.top_k, 8
+    x = layer.norm(h)
+    query = layer.query(x)
+    idx = layer.retrieve(query, keys)
+    score = (query[:, :, None, :] * keys[idx]).sum(-1) / math.sqrt(layer.cfg.key_dim)
+    vals = (wte(store["val"][idx]) + val_pos.weight).reshape(B, T, k * L, D)
+    valid = store["val_mask"][idx].reshape(B, T, k * L)
+    bias = mx.where(valid > 0, mx.repeat(layer.score_scale * score, L, axis=-1), -1e9)
+    qh = layer.q(x).reshape(B, T, H, 1, dh)
+    kh = layer.k(vals).reshape(B, T, k * L, H, dh).transpose(0, 1, 3, 2, 4)
+    vh = layer.v(vals).reshape(B, T, k * L, H, dh).transpose(0, 1, 3, 2, 4)
+    logits = (qh @ kh.swapaxes(-1, -2)) / math.sqrt(dh) + bias[:, :, None, None, :]
+    null = mx.broadcast_to(layer.null_logit.reshape(1, 1, H, 1, 1), (B, T, H, 1, 1))
+    attn = mx.softmax(mx.concatenate([logits, null], axis=-1), axis=-1)
+    out = attn[..., :-1] @ vh + attn[..., -1:] * layer.null_value[None, None, :, None, :]
+    return h + layer.o(out.reshape(B, T, D))
+
+
+def test_read_layer_matches_the_direct_implementation(data, model):
+    store = Store(data.world, Tokenizer(data.vocab)).arrays
+    layer = model.reads[1]
+    layer.null_value = mx.random.normal(layer.null_value.shape)  # nonzero so the null path is checked
+    h = mx.random.normal((2, 7, 64))
+    keys = model.encode_keys(store)
+    fast = layer(h, keys, store, model.wte, model.val_pos)[0]
+    ref = _reference_read(layer, h, keys, store, model.wte, model.val_pos)
+    assert mx.allclose(fast, ref, atol=1e-4).item()
+
+    g_fast = nn.value_and_grad(layer, lambda hh: layer(hh, keys, store, model.wte, model.val_pos)[0].square().sum())
+    g_ref = nn.value_and_grad(layer, lambda hh: _reference_read(layer, hh, keys, store, model.wte, model.val_pos).square().sum())
+    (_, ga), (_, gb) = g_fast(h), g_ref(h)
+    for (name, a), (_, b) in zip(tree_flatten(ga), tree_flatten(gb)):
+        # Equal up to float32 summation order: compare against each gradient's scale.
+        assert mx.abs(a - b).max().item() <= 1e-2 * mx.abs(b).max().item() + 1e-6, name
+
+
+@pytest.mark.parametrize("n,group", [(1000, 64), (1024, 256), (70, 256), (4099, 128)])
+def test_two_stage_top_k_is_exact(n, group):
+    from hemispheres.latent import top_k_indices
+    mx.random.seed(n)
+    scores = mx.random.normal((50, n))
+    got = top_k_indices(scores, 4, group)
+    for row, idx in zip(scores.tolist(), got.tolist()):
+        assert all(0 <= j < n for j in idx)
+        assert sorted(row[j] for j in idx) == sorted(row)[-4:]
+
+
+def test_loss_reports_retrieval_accuracy_per_hop(data, model):
+    tok = Tokenizer(data.vocab)
+    store = Store(data.world, tok)
+    packer = Packer(ExampleSampler(data, "latent", parse_mix("qa=1", "latent"), seed=5), tok, batch_size=4,
+                    seq_len=128, store=store, n_reads=3, max_supervision=256)
+    batch = packer.batch()
+    _, _, _, hits, counts = latent_loss(model, store.arrays, *batch, hop_weight=0.5)
+    hops = batch[3][:, 0].tolist()
+    valid = batch[5].tolist()
+    assert counts.tolist() == [sum(1 for h, v in zip(hops, valid) if v and h == i) for i in range(3)]
+    assert all(0 <= h <= c for h, c in zip(hits.tolist(), counts.tolist()))
+
+
+def test_evaluation_reports_retrieval_per_hop(data, model):
+    summary, records = evaluate(model, Tokenizer(data.vocab), data, "latent", ["test_ood"], n=4)
+    for r in records:
+        assert len(r["ret_top1"]) == len(r["ret_topk"]) == r["hops"]
+        assert all(t1 <= tk for t1, tk in zip(r["ret_top1"], r["ret_topk"]))  # top-1 hit implies top-k hit
+    assert set(summary["test_ood"]["3hop"]["retrieval"]) == {"h0", "h1", "h2"}
+
+
+def test_latent_training_runs_end_to_end(data, tmp_path, monkeypatch):
+    from hemispheres import train
+    out = tmp_path / "run"
+    monkeypatch.setattr("sys.argv", ["train", "--arm", "latent", "--data", str(data.path), "--out", str(out),
+                                     "--size", "tiny", "--steps", "3", "--batch-size", "2", "--seq-len", "128",
+                                     "--log-every", "1", "--eval-every", "3", "--eval-n", "2", "--save-every", "0",
+                                     "--warmup", "1"])
+    train.main()
+    logs = [json.loads(line) for line in (out / "metrics.jsonl").read_text().splitlines()]
+    assert any("retrieval_top1" in r for r in logs) and any("eval" in r for r in logs)
+    assert (out / "checkpoints" / "final" / "model.safetensors").exists()

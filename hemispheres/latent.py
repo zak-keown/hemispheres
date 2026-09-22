@@ -34,11 +34,35 @@ class LatentConfig(GPTConfig):
     top_k: int = 4
     key_dim: int = 128
     retrieval_chunk: int = 2048  # positions scored against the whole store at once
+    retrieval_group: int = 256   # store entries per group in two-stage top-k
 
     @property
     def read_after(self) -> list[int]:
         """Number of blocks run before each read layer."""
         return [round(self.n_layer * (i + 1) / (self.n_reads + 1)) for i in range(self.n_reads)]
+
+
+def top_k_indices(scores: mx.array, k: int, group: int) -> mx.array:
+    """Column indices (P, k) of the k largest scores in each row of (P, N), in no particular order.
+
+    Two stages, exact up to ties: split each row into groups of `group`, keep
+    the k groups with the largest maxima, then take the top k of those k·group
+    scores. Every top-k entry lies in one of those groups (a group holding one
+    would otherwise be beaten by k groups each holding a larger score). This
+    replaces a partition over N columns with a max-reduction plus two small
+    partitions.
+    """
+    P, N = scores.shape
+    n_groups = -(-N // group)
+    if n_groups <= k:
+        return mx.argpartition(-scores, kth=k - 1, axis=-1)[:, :k]
+    if n_groups * group != N:
+        scores = mx.pad(scores, [(0, 0), (0, n_groups * group - N)], constant_values=-float("inf"))
+    grouped = scores.reshape(P, n_groups, group)
+    top_groups = mx.argpartition(-grouped.max(axis=-1), kth=k - 1, axis=-1)[:, :k]            # (P, k)
+    candidates = mx.take_along_axis(grouped, top_groups[:, :, None], axis=1).reshape(P, k * group)
+    local = mx.argpartition(-candidates, kth=k - 1, axis=-1)[:, :k]                            # (P, k)
+    return mx.take_along_axis(top_groups, local // group, axis=1) * group + local % group
 
 
 class KeyEncoder(nn.Module):
@@ -76,18 +100,23 @@ class ReadLayer(nn.Module):
         self.null_value = mx.zeros((cfg.n_head, cfg.head_dim))
 
     def retrieve(self, q: mx.array, keys: mx.array) -> mx.array:
-        """Indices (B, T, k) of the top-k entries for each position; no gradient."""
+        """Indices (B, T, k) of the exact top-k entries for each position; no gradient."""
         B, T, dk = q.shape
         flat, kt = mx.stop_gradient(q).reshape(-1, dk), mx.stop_gradient(keys).T
-        k = self.cfg.top_k
-        chunks = []
-        for c in range(0, flat.shape[0], self.cfg.retrieval_chunk):
-            scores = flat[c:c + self.cfg.retrieval_chunk] @ kt
-            chunks.append(mx.argpartition(-scores, kth=k - 1, axis=-1)[:, :k])
-        return mx.concatenate(chunks, axis=0).reshape(B, T, k)
+        chunks = [top_k_indices(flat[c:c + self.cfg.retrieval_chunk] @ kt, self.cfg.top_k, self.cfg.retrieval_group)
+                  for c in range(0, flat.shape[0], self.cfg.retrieval_chunk)]
+        return mx.concatenate(chunks, axis=0).reshape(B, T, self.cfg.top_k)
 
     def __call__(self, h: mx.array, keys: mx.array, store: dict, wte: nn.Embedding,
                  val_pos: nn.Embedding) -> tuple[mx.array, mx.array]:
+        """Cross-attention over the retrieved name tokens.
+
+        A retrieved token's embedding is wte[id] + pos[l], and the key/value
+        projections are linear. So instead of projecting every retrieved token
+        at every position, project the vocabulary and position tables once,
+        score queries against the whole projected vocabulary (V is small), and
+        gather the retrieved entries' scores and values by token id.
+        """
         B, T, D = h.shape
         H, dh, k, L = self.n_head, self.head_dim, self.cfg.top_k, MAX_NAME_LEN
         x = self.norm(h)
@@ -95,19 +124,25 @@ class ReadLayer(nn.Module):
         idx = self.retrieve(query, keys)                                 # (B, T, k)
         score = (query[:, :, None, :] * keys[idx]).sum(-1) / math.sqrt(self.cfg.key_dim)  # (B, T, k)
 
-        vals = wte(store["val"][idx]) + val_pos.weight                   # (B, T, k, L, D)
-        vals = vals.reshape(B, T, k * L, D)
+        ids = store["val"][idx].reshape(B, T, k * L)                     # token ids of retrieved names
         valid = store["val_mask"][idx].reshape(B, T, k * L)
         bias = mx.repeat(self.score_scale * score, L, axis=-1)           # (B, T, k*L)
         bias = mx.where(valid > 0, bias, -1e9)
 
-        qh = self.q(x).reshape(B, T, H, 1, dh)
-        kh = self.k(vals).reshape(B, T, k * L, H, dh).transpose(0, 1, 3, 2, 4)  # (B, T, H, kL, dh)
-        vh = self.v(vals).reshape(B, T, k * L, H, dh).transpose(0, 1, 3, 2, 4)
-        logits = (qh @ kh.swapaxes(-1, -2)) / math.sqrt(dh) + bias[:, :, None, None, :]  # (B, T, H, 1, kL)
-        null = mx.broadcast_to(self.null_logit.reshape(1, 1, H, 1, 1), (B, T, H, 1, 1))
+        qh = self.q(x).reshape(B, T, H, dh).transpose(0, 2, 1, 3)        # (B, H, T, dh)
+        k_tok = self.k(wte.weight).reshape(-1, H, dh).transpose(1, 2, 0)  # (H, dh, V)
+        k_pos = self.k(val_pos.weight).reshape(L, H, dh).transpose(1, 2, 0)  # (H, dh, L)
+        qk_tok = (qh @ k_tok).transpose(0, 2, 1, 3)                      # (B, T, H, V)
+        qk_pos = (qh @ k_pos).transpose(0, 2, 1, 3)                      # (B, T, H, L)
+        logits = mx.take_along_axis(qk_tok, mx.broadcast_to(ids[:, :, None, :], (B, T, H, k * L)), axis=-1)
+        logits = (logits + mx.tile(qk_pos, (1, 1, 1, k))) / math.sqrt(dh) + bias[:, :, None, :]  # (B, T, H, kL)
+
+        null = mx.broadcast_to(self.null_logit.reshape(1, 1, H, 1), (B, T, H, 1))
         attn = mx.softmax(mx.concatenate([logits, null], axis=-1).astype(mx.float32), axis=-1).astype(h.dtype)
-        out = attn[..., :-1] @ vh + attn[..., -1:] * self.null_value[None, None, :, None, :]  # (B, T, H, 1, dh)
+        v_tok, v_pos = self.v(wte.weight), self.v(val_pos.weight)        # (V, D), (L, D)
+        vh = (v_tok[ids] + mx.tile(v_pos, (k, 1))).reshape(B, T, k * L, H, dh).transpose(0, 1, 3, 2, 4)
+        out = (attn[..., None, :-1] @ vh)[..., 0, :]                     # (B, T, H, dh)
+        out = out + attn[..., -1:] * self.null_value
         return h + self.o(out.reshape(B, T, D)), query
 
 
@@ -149,7 +184,12 @@ class LatentGPT(nn.Module):
 
 def latent_loss(model: LatentGPT, store: dict, inputs: mx.array, targets: mx.array, weights: mx.array,
                 sup_idx: mx.array, sup_fact: mx.array, sup_valid: mx.array, hop_weight: float):
-    """LM loss + hop_weight · InfoNCE(read-layer query → gold fact key). Returns (total, lm, nce)."""
+    """LM loss + hop_weight · InfoNCE(read-layer query → gold fact key).
+
+    Returns (total, lm, nce, hop_hits, hop_counts): the last two count, per read
+    layer, supervised positions and those where the query's top-1 entry over the
+    whole store is the gold fact (retrieval accuracy; no gradient).
+    """
     logits, queries, keys = model.forward(inputs, store)
     ce = nn.losses.cross_entropy(logits.astype(mx.float32), targets, reduction="none")
     lm = (ce * weights).sum() / mx.maximum(weights.sum(), 1.0)
@@ -157,4 +197,8 @@ def latent_loss(model: LatentGPT, store: dict, inputs: mx.array, targets: mx.arr
     nce_logits = (q @ keys.T).astype(mx.float32) / math.sqrt(model.cfg.key_dim)
     nce_ce = nn.losses.cross_entropy(nce_logits, sup_fact, reduction="none")
     nce = (nce_ce * sup_valid).sum() / mx.maximum(sup_valid.sum(), 1.0)
-    return lm + hop_weight * nce, lm, nce
+    hit = (mx.argmax(nce_logits, axis=-1) == sup_fact).astype(mx.float32) * sup_valid
+    per_hop = (sup_idx[:, :1] == mx.arange(model.cfg.n_reads)).astype(mx.float32)          # (S, n_reads)
+    hop_hits = mx.stop_gradient((hit[:, None] * per_hop).sum(axis=0))
+    hop_counts = mx.stop_gradient((sup_valid[:, None] * per_hop).sum(axis=0))
+    return lm + hop_weight * nce, lm, nce, hop_hits, hop_counts

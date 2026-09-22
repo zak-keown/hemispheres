@@ -17,6 +17,7 @@ Start with [`research/BRIEF.md`](research/BRIEF.md). It covers prior art, the ga
 | `hemispheres/data.py`, `generate.py`, `checkpoint.py` | Batching, decoding with the store in the loop, run directories |
 | `tests/` | Invariant tests for the generator and training plumbing (`pytest`) |
 | `bench/throughput.py` | Training-throughput benchmark; sizes every experiment |
+| `bench/latent_profile.py` | Where a latent-arm training step spends its time |
 | `results/` | Benchmark outputs (JSON + Markdown) |
 
 ## Setup
@@ -27,6 +28,7 @@ Requires Apple Silicon and Python 3.11+.
 python3.12 -m venv .venv
 .venv/bin/pip install -e '.[dev]'
 .venv/bin/python -m pytest -q tests
+HEMI_DEVICE=cpu .venv/bin/python -m pytest -q tests   # leave the GPU free for training
 ```
 
 ## Throughput benchmark

@@ -27,7 +27,7 @@ from .generate import generate
 from .store import Store
 from .synth import render
 from .synth.render import Tokenizer
-from .synth.schema import END, EOS, LOOKUP, RESULT
+from .synth.schema import END, EOS, LOOKUP, PAD, RESULT
 
 SPLIT_SETS = ("test_id", "test_ood", "test_1hop_ood", "train", "all")
 EDIT_SETS = ("direct", "ripple", "locality")
@@ -111,6 +111,31 @@ def score(model, tok: Tokenizer, data: WorldData, questions: list[Question], sty
     return records
 
 
+def retrieval_diagnostics(model, store: Store, tok: Tokenizer, data: WorldData, questions: list[Question],
+                          prompts: list[list[str]], batch_size: int = 256) -> list[dict]:
+    """For a latent-store model: at the last prompt position (where the answer starts),
+    did read layer i retrieve hop i's gold fact, as the top-1 entry and within the top-k?"""
+    import mlx.core as mx
+
+    pad, out = tok.token_id(PAD), []
+    for c in range(0, len(prompts), batch_size):
+        enc = [tok.encode(p) for p in prompts[c:c + batch_size]]
+        width = max(map(len, enc))
+        ids = mx.array([e + [pad] * (width - len(e)) for e in enc], dtype=mx.int32)
+        _, queries, keys = model.forward(ids, store.arrays)
+        rows, last = mx.arange(len(enc)), mx.array([len(e) - 1 for e in enc])
+        layers = []
+        for read, q in zip(model.reads, queries):
+            q = q[rows, last]                                            # (b, dk)
+            layers.append((mx.argmax(q @ keys.T, axis=-1).tolist(), read.retrieve(q[:, None, :], keys)[:, 0].tolist()))
+        for j, question in enumerate(questions[c:c + batch_size]):
+            gold = [store.index[(s, r)] for s, r, _ in data.world.chain(question.subject, question.path)]
+            gold = gold[:len(layers)]
+            out.append({"ret_top1": [layers[i][0][j] == g for i, g in enumerate(gold)],
+                        "ret_topk": [g in layers[i][1][j] for i, g in enumerate(gold)]})
+    return out
+
+
 def summarize(records: list[dict]) -> dict:
     groups = defaultdict(list)
     for r in records:
@@ -124,6 +149,13 @@ def summarize(records: list[dict]) -> dict:
         out[s][key] = {"acc": sum(r["correct"] for r in rs) / len(rs), "n": len(rs)}
         if "trace_ok" in rs[0]:
             out[s][key]["trace_ok"] = sum(r["trace_ok"] for r in rs) / len(rs)
+        if "ret_top1" in rs[0]:
+            ret = {}
+            for i in range(max(len(r["ret_top1"]) for r in rs)):
+                hop = [r for r in rs if len(r["ret_top1"]) > i]
+                ret[f"h{i}"] = {"top1": sum(r["ret_top1"][i] for r in hop) / len(hop),
+                                "topk": sum(r["ret_topk"][i] for r in hop) / len(hop)}
+            out[s][key]["retrieval"] = ret
     return dict(out)
 
 
@@ -133,6 +165,8 @@ def format_summary(summary: dict) -> str:
         cells = []
         for key, v in groups.items():
             extra = f", trace {v['trace_ok']:.0%}" if "trace_ok" in v else ""
+            if "retrieval" in v:
+                extra += ", ret " + "/".join(f"{h['top1']:.0%}" for h in v["retrieval"].values())
             cells.append(f"{key} {v['acc']:.1%} (n={v['n']}{extra})")
         lines.append(f"{s:>14}: " + " · ".join(cells))
     return "\n".join(lines)
@@ -142,13 +176,17 @@ def evaluate(model, tok: Tokenizer, data: WorldData, arm: str, sets: list[str], 
     questions = []
     for s in sets:
         questions += edit_questions(data, s, n, seed) if s in EDIT_SETS else split_questions(data, s, n, seed)
-    forward = model
+    forward, store = model, None
     if ARMS[arm].latent_store:
-        store = Store(data.world, tok).arrays
+        store = Store(data.world, tok)
 
         def forward(x):
-            return model(x, store)
+            return model(x, store.arrays)
     records = score(forward, tok, data, questions, ARMS[arm].qa_style, seed)
+    if store is not None:
+        prompts = [prompt_tokens(data, q, ARMS[arm].qa_style, seed) for q in questions]
+        for rec, diag in zip(records, retrieval_diagnostics(model, store, tok, data, questions, prompts)):
+            rec.update(diag)
     return summarize(records), records
 
 

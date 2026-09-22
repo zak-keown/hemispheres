@@ -95,21 +95,22 @@ def train(args) -> None:
         print(f"resumed {run} at step {start}")
 
     def loss_fn(*batch):
-        """(total, lm, hop) losses; hop is the retrieval-supervision term (0 without a store)."""
+        """(total, lm, hop, hop_hits, hop_counts): hop is the retrieval-supervision loss and
+        hop_hits/hop_counts give per-read-layer top-1 retrieval accuracy (all zero without a store)."""
         if latent:
             return latent_loss(model, store.arrays, *batch, hop_weight=args.hop_weight)
         lm = masked_lm_loss(model, *batch)
-        return lm, lm, mx.array(0.0)
+        return lm, lm, mx.array(0.0), mx.zeros((1,)), mx.zeros((1,))
 
     loss_and_grad = nn.value_and_grad(model, loss_fn)
     state = [model.state, optimizer.state]
 
     @partial(mx.compile, inputs=state, outputs=state)
     def step_fn(*batch):
-        (loss, lm, hop), grads = loss_and_grad(*batch)
+        (loss, lm, hop, hits, counts), grads = loss_and_grad(*batch)
         grads, grad_norm = optim.clip_grad_norm(grads, args.grad_clip)
         optimizer.update(model, grads)
-        return loss, lm, hop, grad_norm
+        return loss, lm, hop, hits, counts, grad_norm
 
     def run_eval(step: int) -> None:
         summary, _ = evaluate(model, tok, data, args.arm, args.eval_sets.split(","), args.eval_n, args.seed)
@@ -119,13 +120,14 @@ def train(args) -> None:
     print(f"{args.arm}: {model.num_params() / 1e6:.1f}M params, {len(tok)} tokens, mix {mix}, "
           f"{args.steps} steps × {args.batch_size}×{args.seq_len}")
     batch = packer.batch()
-    t_last, trained_tokens, losses = time.perf_counter(), 0, []
+    t_last, trained_tokens, losses, hits_sum, counts_sum = time.perf_counter(), 0, [], 0, 0
     for step in range(start, args.steps):
-        loss, lm, hop, grad_norm = step_fn(*batch)
-        mx.async_eval(loss, lm, hop, grad_norm, state)
+        loss, lm, hop, hits, counts, grad_norm = step_fn(*batch)
+        mx.async_eval(loss, lm, hop, hits, counts, grad_norm, state)
         trained_tokens += int(batch[2].sum().item())
         batch = packer.batch()  # build the next batch while this step runs
         losses.append((loss.item(), lm.item(), hop.item()))
+        hits_sum, counts_sum = hits_sum + hits, counts_sum + counts
 
         if (step + 1) % args.log_every == 0 or step + 1 == args.steps:
             dt = time.perf_counter() - t_last
@@ -136,11 +138,15 @@ def train(args) -> None:
             if latent:
                 rec["lm_loss"] = sum(x[1] for x in losses) / n
                 rec["hop_loss"] = sum(x[2] for x in losses) / n
+                rec["retrieval_top1"] = [h / c if c else None for h, c in zip(hits_sum.tolist(), counts_sum.tolist())]
             log(run, rec)
-            parts = f" (lm {rec['lm_loss']:.4f}, hop {rec['hop_loss']:.4f})" if latent else ""
+            parts = ""
+            if latent:
+                ret = " ".join(f"h{i} {a:.0%}" for i, a in enumerate(rec["retrieval_top1"]) if a is not None)
+                parts = f" (lm {rec['lm_loss']:.4f}, hop {rec['hop_loss']:.4f}; retrieval {ret})"
             print(f"step {rec['step']:>6} loss {rec['loss']:.4f}{parts} gnorm {rec['grad_norm']:.2f} "
                   f"lr {rec['lr']:.2e} {rec['tok_per_s']:,.0f} tok/s ({rec['trained_frac']:.0%} trained)", flush=True)
-            t_last, trained_tokens, losses = time.perf_counter(), 0, []
+            t_last, trained_tokens, losses, hits_sum, counts_sum = time.perf_counter(), 0, [], 0, 0
         if args.save_every and (step + 1) % args.save_every == 0:
             checkpoint.save(run, "latest", model, optimizer, {"step": step + 1, "sampler": sampler.state()})
         if args.eval_every and (step + 1) % args.eval_every == 0 and step + 1 != args.steps:
