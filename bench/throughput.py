@@ -306,7 +306,8 @@ def main() -> None:
     p.add_argument("--no-compile", action="store_true")
     p.add_argument("--matmul-sizes", default="4096,8192")
     p.add_argument("--sustain", type=float, default=0.0, help="seconds to run one config for a throttling test")
-    p.add_argument("--timeout", type=float, default=900.0, help="per-config timeout in seconds")
+    p.add_argument("--timeout", type=float, default=300.0,
+                   help="per-config timeout in seconds; configs that overflow memory swap until they hit it")
     p.add_argument("--out", default=None, help="results path stem (default results/throughput-<timestamp>)")
     args = p.parse_args()
 
