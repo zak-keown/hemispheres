@@ -1,0 +1,13 @@
+[project]
+name = "hemispheres"
+version = "0.0.1"
+description = "Research code for Hemispheres: an LLM that separates reasoning from an updatable knowledge store."
+requires-python = ">=3.11"
+dependencies = ["mlx>=0.32"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["hemispheres"]
