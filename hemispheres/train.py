@@ -4,6 +4,7 @@
   python -m hemispheres.train --arm dense   --data data/world-a --out runs/dense-a
   python -m hemispheres.train --arm lookup  --data data/world-a --out runs/lookup-a
   python -m hemispheres.train --arm context --data data/world-a --out runs/context-a
+  python -m hemispheres.train --arm latent  --data data/world-a --out runs/latent-a
 
   # Updating a dense model is training: continue from its weights on new facts
   python -m hemispheres.train --arm dense --data data/world-b --init runs/dense-a --mix bios=1 \\
@@ -30,7 +31,9 @@ import mlx.optimizers as optim
 from . import checkpoint
 from .data import ARMS, ExampleSampler, Packer, WorldData, parse_mix
 from .evaluate import evaluate, format_summary
+from .latent import LatentConfig, LatentGPT, latent_loss
 from .model import GPT, SIZES, config_for, masked_lm_loss
+from .store import Store
 from .synth.render import Tokenizer
 
 
@@ -56,25 +59,33 @@ def train(args) -> None:
     data = WorldData(args.data, args.edits)
     tok = Tokenizer(data.vocab)
     mix = parse_mix(args.mix, args.arm)
+    latent = ARMS[args.arm].latent_store
 
     if args.init:
         model, init_config = checkpoint.load_model(args.init, args.init_checkpoint)
         if init_config["arm"] != args.arm:
             raise SystemExit(f"--init run was trained as {init_config['arm']!r}, not {args.arm!r}")
         model_cfg = model.cfg
+    elif latent:
+        model_cfg = LatentConfig(**SIZES[args.size], vocab_size=64 * math.ceil(len(tok) / 64),
+                                 n_reads=args.n_reads, top_k=args.top_k)
+        model = LatentGPT(model_cfg)
     else:
         model_cfg = config_for(args.size, vocab_size=64 * math.ceil(len(tok) / 64))
         model = GPT(model_cfg)
     model.set_dtype(getattr(mx, args.dtype))
     mx.eval(model.parameters())
 
-    config = {**{k: v for k, v in vars(args).items() if k != "resume"}, "mix": mix, "model": asdict(model_cfg),
+    config = {**{k: v for k, v in vars(args).items() if k != "resume"}, "mix": mix,
+              "model_type": "latent" if latent else "gpt", "model": asdict(model_cfg),
               "params": model.num_params(), "vocab": len(tok)}
     (run / "config.json").write_text(json.dumps(config, indent=2))  # a resume records its new settings
 
     optimizer = make_optimizer(args)
     sampler = ExampleSampler(data, args.arm, mix, args.seed)
-    packer = Packer(sampler, tok, args.batch_size, args.seq_len)
+    store = Store(data.world, tok) if latent else None
+    packer = Packer(sampler, tok, args.batch_size, args.seq_len, store=store,
+                    n_reads=model_cfg.n_reads if latent else 0, max_supervision=args.max_supervision)
     start = 0
     if resuming:
         model.load_weights(str(run / "checkpoints" / "latest" / "model.safetensors"))
@@ -83,15 +94,22 @@ def train(args) -> None:
         sampler.set_state(state["sampler"])
         print(f"resumed {run} at step {start}")
 
-    loss_and_grad = nn.value_and_grad(model, partial(masked_lm_loss, model))
+    def loss_fn(*batch):
+        """(total, lm, hop) losses; hop is the retrieval-supervision term (0 without a store)."""
+        if latent:
+            return latent_loss(model, store.arrays, *batch, hop_weight=args.hop_weight)
+        lm = masked_lm_loss(model, *batch)
+        return lm, lm, mx.array(0.0)
+
+    loss_and_grad = nn.value_and_grad(model, loss_fn)
     state = [model.state, optimizer.state]
 
     @partial(mx.compile, inputs=state, outputs=state)
-    def step_fn(inputs, targets, weights):
-        loss, grads = loss_and_grad(inputs, targets, weights)
+    def step_fn(*batch):
+        (loss, lm, hop), grads = loss_and_grad(*batch)
         grads, grad_norm = optim.clip_grad_norm(grads, args.grad_clip)
         optimizer.update(model, grads)
-        return loss, grad_norm
+        return loss, lm, hop, grad_norm
 
     def run_eval(step: int) -> None:
         summary, _ = evaluate(model, tok, data, args.arm, args.eval_sets.split(","), args.eval_n, args.seed)
@@ -103,20 +121,25 @@ def train(args) -> None:
     batch = packer.batch()
     t_last, trained_tokens, losses = time.perf_counter(), 0, []
     for step in range(start, args.steps):
-        loss, grad_norm = step_fn(*batch)
-        mx.async_eval(loss, grad_norm, state)
+        loss, lm, hop, grad_norm = step_fn(*batch)
+        mx.async_eval(loss, lm, hop, grad_norm, state)
         trained_tokens += int(batch[2].sum().item())
         batch = packer.batch()  # build the next batch while this step runs
-        losses.append(loss.item())
+        losses.append((loss.item(), lm.item(), hop.item()))
 
         if (step + 1) % args.log_every == 0 or step + 1 == args.steps:
             dt = time.perf_counter() - t_last
-            rec = {"step": step + 1, "loss": sum(losses) / len(losses), "grad_norm": grad_norm.item(),
-                   "lr": float(optimizer.learning_rate), "tok_per_s": args.batch_size * args.seq_len * len(losses) / dt,
-                   "trained_frac": trained_tokens / (args.batch_size * args.seq_len * len(losses))}
+            n = len(losses)
+            rec = {"step": step + 1, "loss": sum(x[0] for x in losses) / n, "grad_norm": grad_norm.item(),
+                   "lr": float(optimizer.learning_rate), "tok_per_s": args.batch_size * args.seq_len * n / dt,
+                   "trained_frac": trained_tokens / (args.batch_size * args.seq_len * n)}
+            if latent:
+                rec["lm_loss"] = sum(x[1] for x in losses) / n
+                rec["hop_loss"] = sum(x[2] for x in losses) / n
             log(run, rec)
-            print(f"step {rec['step']:>6} loss {rec['loss']:.4f} gnorm {rec['grad_norm']:.2f} lr {rec['lr']:.2e} "
-                  f"{rec['tok_per_s']:,.0f} tok/s ({rec['trained_frac']:.0%} trained)", flush=True)
+            parts = f" (lm {rec['lm_loss']:.4f}, hop {rec['hop_loss']:.4f})" if latent else ""
+            print(f"step {rec['step']:>6} loss {rec['loss']:.4f}{parts} gnorm {rec['grad_norm']:.2f} "
+                  f"lr {rec['lr']:.2e} {rec['tok_per_s']:,.0f} tok/s ({rec['trained_frac']:.0%} trained)", flush=True)
             t_last, trained_tokens, losses = time.perf_counter(), 0, []
         if args.save_every and (step + 1) % args.save_every == 0:
             checkpoint.save(run, "latest", model, optimizer, {"step": step + 1, "sampler": sampler.state()})
@@ -157,6 +180,11 @@ def main() -> None:
     p.add_argument("--save-every", type=int, default=2000)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--resume", action="store_true")
+    g = p.add_argument_group("latent arm")
+    g.add_argument("--n-reads", type=int, default=3, help="read layers (one per hop)")
+    g.add_argument("--top-k", type=int, default=4, help="store entries retrieved per read")
+    g.add_argument("--hop-weight", type=float, default=0.5, help="weight of the retrieval-supervision loss (0 = off)")
+    g.add_argument("--max-supervision", type=int, default=512, help="supervised retrieval slots per batch")
     train(p.parse_args())
 
 

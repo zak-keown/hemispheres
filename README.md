@@ -11,7 +11,8 @@ Start with [`research/BRIEF.md`](research/BRIEF.md). It covers prior art, the ga
 | `research/` | Literature review and research brief |
 | `hemispheres/model.py` | Dense GPT baseline in MLX (RMSNorm, RoPE, tied embeddings) |
 | `hemispheres/synth/` | Synthetic-world generator: worlds, question splits, counterfactual edits, renderers |
-| `hemispheres/train.py` | Training loop for the dense, lookup and in-context-oracle arms |
+| `hemispheres/train.py` | Training loop for all four arms |
+| `hemispheres/latent.py`, `store.py` | Latent-store reasoner (read layers, key encoder) and a world's facts as store arrays |
 | `hemispheres/evaluate.py` | Exact-match evaluation: held-out splits, world swap, counterfactual edits |
 | `hemispheres/data.py`, `generate.py`, `checkpoint.py` | Batching, decoding with the store in the loop, run directories |
 | `tests/` | Invariant tests for the generator and training plumbing (`pytest`) |
@@ -62,13 +63,14 @@ Output goes to `data/<name>/` (git-ignored; regenerate deterministically). Check
 
 ## Training and evaluation
 
-Three arms are implemented. Each trains a reasoner from scratch on world A:
+Four arms are implemented. Each trains a reasoner from scratch on world A:
 
 | Arm | Where facts live | Trained on |
 |---|---|---|
 | `dense` | in the weights | bios + direct QA (answer tokens only) |
 | `lookup` | in the store; the model writes `[LOOKUP] subject @relation [RESULT]` and the store answers | bios with lookups + QA with one lookup per hop; store tokens are never trained on |
 | `context` | in the prompt (in-context oracle) | QA with gold facts + distractors in the prompt |
+| `latent` | in the store, read **inside the forward pass**: read layers retrieve facts by learned query · key and cross-attend over the retrieved objects' name tokens ([design](research/latent-arm-design.md)) | bios + direct QA, plus an optional retrieval loss per hop (`--hop-weight`) |
 
 ```sh
 .venv/bin/python -m hemispheres.train --arm lookup --data data/world-a --out runs/lookup-a

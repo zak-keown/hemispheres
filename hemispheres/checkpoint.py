@@ -15,7 +15,10 @@ from pathlib import Path
 import mlx.core as mx
 from mlx.utils import tree_flatten, tree_unflatten
 
+from .latent import LatentConfig, LatentGPT
 from .model import GPT, GPTConfig
+
+MODEL_TYPES = {"gpt": (GPT, GPTConfig), "latent": (LatentGPT, LatentConfig)}
 
 
 def save(run: Path, tag: str, model: GPT, optimizer=None, state: dict | None = None) -> Path:
@@ -29,11 +32,16 @@ def save(run: Path, tag: str, model: GPT, optimizer=None, state: dict | None = N
     return d
 
 
-def load_model(run: str | Path, tag: str = "final") -> tuple[GPT, dict]:
+def build_model(model_type: str, cfg: dict):
+    cls, cfg_cls = MODEL_TYPES[model_type]
+    return cls(cfg_cls(**cfg))
+
+
+def load_model(run: str | Path, tag: str = "final") -> tuple:
     """The model saved under `tag`, and the run's config."""
     run = Path(run)
     config = json.loads((run / "config.json").read_text())
-    model = GPT(GPTConfig(**config["model"]))
+    model = build_model(config.get("model_type", "gpt"), config["model"])
     model.load_weights(str(run / "checkpoints" / tag / "model.safetensors"))
     model.set_dtype(getattr(mx, config.get("dtype", "float32")))
     mx.eval(model.parameters())

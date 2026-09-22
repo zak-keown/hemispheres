@@ -24,6 +24,7 @@ from pathlib import Path
 from . import checkpoint
 from .data import ARMS, WorldData
 from .generate import generate
+from .store import Store
 from .synth import render
 from .synth.render import Tokenizer
 from .synth.schema import END, EOS, LOOKUP, RESULT
@@ -91,6 +92,7 @@ def parse_output(output: list[str], style: str) -> tuple[list[str] | None, list[
 
 def score(model, tok: Tokenizer, data: WorldData, questions: list[Question], style: str, seed: int = 0,
           batch_size: int = 256) -> list[dict]:
+    """`model` maps token ids (B, T) to logits; latent-store models are bound to a store first."""
     prompts = [prompt_tokens(data, q, style, seed) for q in questions]
     max_new = 24 + 16 * max((len(q.path) for q in questions), default=1) if style == "lookup" else 24
     outputs = generate(model, tok, prompts, max_new=max_new, store=data.world if style == "lookup" else None,
@@ -140,7 +142,13 @@ def evaluate(model, tok: Tokenizer, data: WorldData, arm: str, sets: list[str], 
     questions = []
     for s in sets:
         questions += edit_questions(data, s, n, seed) if s in EDIT_SETS else split_questions(data, s, n, seed)
-    records = score(model, tok, data, questions, ARMS[arm].qa_style, seed)
+    forward = model
+    if ARMS[arm].latent_store:
+        store = Store(data.world, tok).arrays
+
+        def forward(x):
+            return model(x, store)
+    records = score(forward, tok, data, questions, ARMS[arm].qa_style, seed)
     return summarize(records), records
 
 

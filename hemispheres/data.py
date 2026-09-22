@@ -17,6 +17,7 @@ from pathlib import Path
 
 import mlx.core as mx
 
+from .store import Store
 from .synth import render
 from .synth.edits import Edit, apply_edits
 from .synth.render import Example, Tokenizer
@@ -29,12 +30,14 @@ class Arm:
     bio_lookup: bool          # bios use [LOOKUP] calls instead of stating facts
     qa_style: str             # "direct", "lookup" or "context"
     default_mix: tuple        # ((source, weight), ...)
+    latent_store: bool = False  # the model reads a Store inside its forward pass
 
 
 ARMS = {
     "dense": Arm(bio_lookup=False, qa_style="direct", default_mix=(("bios", 0.5), ("qa", 0.5))),
     "lookup": Arm(bio_lookup=True, qa_style="lookup", default_mix=(("bios", 0.5), ("qa", 0.5))),
     "context": Arm(bio_lookup=False, qa_style="context", default_mix=(("qa", 1.0),)),
+    "latent": Arm(bio_lookup=False, qa_style="direct", default_mix=(("bios", 0.5), ("qa", 0.5)), latent_store=True),
 }
 SOURCES = ("bios", "qa", "edit_facts", "edit_qa")
 
@@ -114,12 +117,19 @@ class ExampleSampler:
 
 
 class Packer:
-    """Packs whole examples into rows of seq_len + 1 tokens; never splits an example."""
+    """Packs whole examples into rows of seq_len + 1 tokens; never splits an example.
 
-    def __init__(self, sampler: ExampleSampler, tokenizer: Tokenizer, batch_size: int, seq_len: int):
+    With a `store`, batches also carry retrieval supervision: up to
+    `max_supervision` (hop, row, position) slots, each with the store index of
+    the fact read layer `hop` should retrieve there, and a validity flag.
+    """
+
+    def __init__(self, sampler: ExampleSampler, tokenizer: Tokenizer, batch_size: int, seq_len: int,
+                 store: Store | None = None, n_reads: int = 0, max_supervision: int = 512):
         self.sampler, self.tok = sampler, tokenizer
         self.batch_size, self.seq_len = batch_size, seq_len
         self.pad = tokenizer.token_id(PAD)
+        self.store, self.n_reads, self.max_supervision = store, n_reads, max_supervision
         self._pending: Example | None = None
 
     def _next_example(self) -> Example:
@@ -129,21 +139,38 @@ class Packer:
                 return ex
             # Too long to ever fit: drop it (none of the current formats come close).
 
-    def row(self) -> tuple[list[int], list[int]]:
-        ids, mask = [], []
+    def row(self) -> tuple[list[int], list[int], list[tuple[int, int, int]]]:
+        ids, mask, sup = [], [], []
         while True:
             ex = self._next_example()
             if len(ids) + len(ex.tokens) > self.seq_len + 1:
                 self._pending = ex
                 break
+            if self.store is not None:
+                sup += [(hop, len(ids) + pos, self.store.index[(s, r)])
+                        for pos, hop, s, r in ex.supervision if hop < self.n_reads]
             ids += self.tok.encode(ex.tokens)
             mask += ex.mask
         n_pad = self.seq_len + 1 - len(ids)
-        return ids + [self.pad] * n_pad, mask + [0] * n_pad
+        return ids + [self.pad] * n_pad, mask + [0] * n_pad, sup
 
-    def batch(self) -> tuple[mx.array, mx.array, mx.array]:
-        """(inputs, targets, weights); weights[t] = 1 where targets[t] is trained on."""
+    def batch(self) -> tuple[mx.array, ...]:
+        """(inputs, targets, weights[, sup_idx, sup_fact, sup_valid]).
+
+        weights[t] = 1 where targets[t] is trained on.
+        """
         rows = [self.row() for _ in range(self.batch_size)]
         ids = mx.array([r[0] for r in rows], dtype=mx.int32)
         weights = mx.array([r[1] for r in rows], dtype=mx.float32)
-        return ids[:, :-1], ids[:, 1:], weights[:, 1:]
+        out = (ids[:, :-1], ids[:, 1:], weights[:, 1:])
+        if self.store is None:
+            return out
+        slots = [(hop, i, pos, fact) for i, r in enumerate(rows) for hop, pos, fact in r[2]]
+        if len(slots) > self.max_supervision:
+            slots = self.sampler.rng.sample(slots, self.max_supervision)
+        n_pad = self.max_supervision - len(slots)
+        slots += [(0, 0, 0, 0)] * n_pad
+        sup_idx = mx.array([s[:3] for s in slots], dtype=mx.int32)
+        sup_fact = mx.array([s[3] for s in slots], dtype=mx.int32)
+        sup_valid = mx.array([1.0] * (len(slots) - n_pad) + [0.0] * n_pad)
+        return out + (sup_idx, sup_fact, sup_valid)
