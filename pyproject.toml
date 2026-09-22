@@ -5,9 +5,12 @@ description = "Research code for Hemispheres: an LLM that separates reasoning fr
 requires-python = ">=3.11"
 dependencies = ["mlx>=0.32"]
 
+[project.optional-dependencies]
+dev = ["pytest"]
+
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools]
-packages = ["hemispheres"]
+[tool.setuptools.packages.find]
+include = ["hemispheres*"]
