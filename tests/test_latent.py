@@ -254,3 +254,12 @@ def test_multi_world_training_and_resume(tmp_path, monkeypatch, arm):
     assert steps == [1, 2, 3, 4, 5, 6]
     config = json.loads((out / "config.json").read_text())
     assert config["data"] == worlds
+
+
+def test_store_overrides_for_leakage_tests(data, model):
+    tok = Tokenizer(data.vocab)
+    other = generate_world("o", 5, sizes=WorldSizes(persons=100, companies=10, universities=3, cities=8, countries=2))
+    for override in ("none", other):
+        summary, records = evaluate(model, tok, data, "latent", ["test_id"], n=3, store_override=override)
+        assert records and "test_id" in summary
+        assert ("ret_top1" in records[0]) == (override == "none")  # diagnostics only when the facts are in the store

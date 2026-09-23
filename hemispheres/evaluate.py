@@ -6,12 +6,20 @@
   python -m hemispheres.evaluate --run runs/lookup-a --data data/world-b --sets all
   # Counterfactual edits: direct / ripple / locality questions after 100 edits
   python -m hemispheres.evaluate --run runs/lookup-a --data data/world-a --edits 100
+  # Leakage: world-A questions with the store's values hidden, or with world C's store
+  python -m hemispheres.evaluate --run runs/latent-multi --data data/world-a --store none
+  python -m hemispheres.evaluate --run runs/latent-multi --data data/world-a --store data/world-c
 
 An answer is correct only if the generated text, after the last store reply in
 the lookup format, is exactly the answer followed by [EOS]. For the lookup arm
 the store is the evaluated world (with edits applied). The context arm gets that
 world's facts in its prompt. The dense arm gets nothing, so it must have been
 updated (see train.py --init) to know a new world or edits.
+
+`--store` replaces the store for leakage tests: "none" hides every value (the
+latent arm's retrieved entries contribute nothing; the lookup arm's lookups get
+no reply), and a world directory serves that world's facts instead. A model
+that holds no facts itself should fall to chance on the evaluated world.
 """
 
 import argparse
@@ -21,6 +29,8 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import mlx.core as mx
+
 from . import checkpoint
 from .data import ARMS, WorldData
 from .generate import generate
@@ -28,6 +38,7 @@ from .store import Store
 from .synth import render
 from .synth.render import Tokenizer
 from .synth.schema import END, EOS, LOOKUP, PAD, RESULT
+from .synth.world import World
 
 SPLIT_SETS = ("test_id", "test_ood", "test_1hop_ood", "train", "all")
 EDIT_SETS = ("direct", "ripple", "locality")
@@ -91,12 +102,15 @@ def parse_output(output: list[str], style: str) -> tuple[list[str] | None, list[
 
 
 def score(model, tok: Tokenizer, data: WorldData, questions: list[Question], style: str, seed: int = 0,
-          batch_size: int = 256) -> list[dict]:
-    """`model` maps token ids (B, T) to logits; latent-store models are bound to a store first."""
+          batch_size: int = 256, lookup_store: World | None | str = "same") -> list[dict]:
+    """`model` maps token ids (B, T) to logits; latent-store models are bound to a store first.
+
+    `lookup_store` answers the lookup arm's queries: "same" is the evaluated world, None no store.
+    """
     prompts = [prompt_tokens(data, q, style, seed) for q in questions]
     max_new = 24 + 16 * max((len(q.path) for q in questions), default=1) if style == "lookup" else 24
-    outputs = generate(model, tok, prompts, max_new=max_new, store=data.world if style == "lookup" else None,
-                       batch_size=batch_size)
+    store = (data.world if lookup_store == "same" else lookup_store) if style == "lookup" else None
+    outputs = generate(model, tok, prompts, max_new=max_new, store=store, batch_size=batch_size)
     records = []
     for q, out in zip(questions, outputs):
         final, queries = parse_output(out, style)
@@ -174,18 +188,27 @@ def format_summary(summary: dict) -> str:
     return "\n".join(lines)
 
 
-def evaluate(model, tok: Tokenizer, data: WorldData, arm: str, sets: list[str], n: int, seed: int = 0) -> tuple:
+def evaluate(model, tok: Tokenizer, data: WorldData, arm: str, sets: list[str], n: int, seed: int = 0,
+             store_override: World | str | None = None) -> tuple:
+    """`store_override`: None uses the evaluated world's store, "none" hides every value,
+    a World serves that world's facts instead (see the module docstring)."""
     questions = []
     for s in sets:
         questions += edit_questions(data, s, n, seed) if s in EDIT_SETS else split_questions(data, s, n, seed)
+    store_world = store_override if isinstance(store_override, World) else data.world
     forward, store = model, None
     if ARMS[arm].latent_store:
-        store = Store(data.world, tok)
+        store = Store(store_world, tok)
+        arrays = store.arrays
+        if store_override == "none":
+            arrays = {**arrays, "val_mask": mx.zeros_like(arrays["val_mask"])}
 
         def forward(x):
-            return model(x, store.arrays)
-    records = score(forward, tok, data, questions, ARMS[arm].qa_style, seed)
-    if store is not None:
+            return model(x, arrays)
+    lookup_store = None if store_override == "none" else store_world
+    records = score(forward, tok, data, questions, ARMS[arm].qa_style, seed, lookup_store=lookup_store)
+    # Retrieval diagnostics need the evaluated world's facts to be in the store.
+    if store is not None and store_world is data.world:
         prompts = [prompt_tokens(data, q, ARMS[arm].qa_style, seed) for q in questions]
         for rec, diag in zip(records, retrieval_diagnostics(model, store, tok, data, questions, prompts)):
             rec.update(diag)
@@ -203,6 +226,8 @@ def main() -> None:
     p.add_argument("--n", type=int, default=500, help="questions per hop count (splits) or per set (edits)")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--name", default=None, help="output name under <run>/evals/")
+    p.add_argument("--store", default=None,
+                   help='leakage tests: "none" hides the store\'s values; a world directory serves that world\'s facts')
     args = p.parse_args()
 
     model, config = checkpoint.load_model(args.run, args.checkpoint)
@@ -210,12 +235,19 @@ def main() -> None:
     tok = Tokenizer(data.vocab)
     sets = (args.sets.split(",") if args.sets else
             list(EDIT_SETS) if args.edits else ["test_id", "test_ood", "test_1hop_ood"])
-    summary, records = evaluate(model, tok, data, config["arm"], sets, args.n, args.seed)
+    store_override = None
+    if args.store == "none":
+        store_override = "none"
+    elif args.store:
+        store_override = WorldData(args.store).world
+    summary, records = evaluate(model, tok, data, config["arm"], sets, args.n, args.seed, store_override)
     print(f"{config['arm']} · {args.run} [{args.checkpoint}] on {data.path.name}"
-          + (f" with {args.edits} edits" if args.edits else ""))
+          + (f" with {args.edits} edits" if args.edits else "")
+          + (f", store: {args.store}" if args.store else ""))
     print(format_summary(summary))
 
-    name = args.name or f"{data.path.name}{f'-k{args.edits}' if args.edits else ''}-{args.checkpoint}"
+    store_tag = f"-store-{Path(args.store).name}" if args.store else ""
+    name = args.name or f"{data.path.name}{f'-k{args.edits}' if args.edits else ''}{store_tag}-{args.checkpoint}"
     out = Path(args.run) / "evals"
     out.mkdir(exist_ok=True)
     (out / f"{name}.json").write_text(json.dumps({"args": vars(args), "summary": summary}, indent=2))
