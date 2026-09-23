@@ -6,6 +6,10 @@
   python -m hemispheres.train --arm context --data data/world-a --out runs/context-a
   python -m hemispheres.train --arm latent  --data data/world-a --out runs/latent-a
 
+  # Multi-world training: each step draws its batch (and store) from one of several worlds;
+  # the first world is the one evaluated during training
+  python -m hemispheres.train --arm latent --data data/world-a,data/pool/w3-s0,data/pool/w4-s0 --out runs/latent-multi
+
   # Updating a dense model is training: continue from its weights on new facts
   python -m hemispheres.train --arm dense --data data/world-b --init runs/dense-a --mix bios=1 \\
       --steps 2000 --out runs/dense-a-to-b
@@ -19,6 +23,7 @@ questions (see evaluate.py). A run can be resumed with --resume.
 import argparse
 import json
 import math
+import random
 import time
 from dataclasses import asdict
 from functools import partial
@@ -56,8 +61,12 @@ def train(args) -> None:
         raise SystemExit(f"{run} is not empty; pass --resume to continue it or choose another --out")
     run.mkdir(parents=True, exist_ok=True)
 
-    data = WorldData(args.data, args.edits)
+    # The first world is primary: it gets --edits and is the one evaluated during training.
+    datas = [WorldData(d, args.edits if i == 0 else 0) for i, d in enumerate(args.data.split(","))]
+    data = datas[0]
     tok = Tokenizer(data.vocab)
+    if any(d.vocab != data.vocab for d in datas):
+        raise SystemExit("all --data worlds must share one vocabulary")
     mix = parse_mix(args.mix, args.arm)
     latent = ARMS[args.arm].latent_store
 
@@ -82,23 +91,40 @@ def train(args) -> None:
     (run / "config.json").write_text(json.dumps(config, indent=2))  # a resume records its new settings
 
     optimizer = make_optimizer(args)
-    sampler = ExampleSampler(data, args.arm, mix, args.seed)
-    store = Store(data.world, tok) if latent else None
-    packer = Packer(sampler, tok, args.batch_size, args.seq_len, store=store,
-                    n_reads=model_cfg.n_reads if latent else 0, max_supervision=args.max_supervision)
+    samplers = [ExampleSampler(d, args.arm, mix, args.seed + i) for i, d in enumerate(datas)]
+    # Stores are padded to one size so every world's store has the same shapes (no recompiles).
+    store_size = max(len(d.world.facts) for d in datas)
+    store_size = model_cfg.retrieval_group * math.ceil(store_size / model_cfg.retrieval_group) if latent else 0
+    stores = [Store(d.world, tok, size=store_size) if latent else None for d in datas]
+    packers = [Packer(smp, tok, args.batch_size, args.seq_len, store=st, n_reads=model_cfg.n_reads if latent else 0,
+                      max_supervision=args.max_supervision, supervise=args.supervise)
+               for smp, st in zip(samplers, stores)]
+    chooser = random.Random(f"worlds:{args.seed}")
     start = 0
     if resuming:
         model.load_weights(str(run / "checkpoints" / "latest" / "model.safetensors"))
         state = checkpoint.load_optimizer_state(run, "latest", optimizer)
         start = state["step"]
-        sampler.set_state(state["sampler"])
+        sampler_states = state["sampler"] if isinstance(state["sampler"], list) else [state["sampler"]]
+        for smp, st in zip(samplers, sampler_states):
+            smp.set_state(st)
+        if "chooser" in state:
+            chooser.setstate(state["chooser"])
         print(f"resumed {run} at step {start}")
 
-    def loss_fn(*batch):
+    def train_state(step: int) -> dict:
+        return {"step": step, "sampler": [smp.state() for smp in samplers], "chooser": chooser.getstate()}
+
+    def next_batch() -> tuple:
+        """(store arrays, batch) from a randomly chosen world."""
+        w = chooser.randrange(len(datas))
+        return (stores[w].arrays if latent else {}), packers[w].batch()
+
+    def loss_fn(store_arrays, *batch):
         """(total, lm, hop, hop_hits, hop_counts): hop is the retrieval-supervision loss and
         hop_hits/hop_counts give per-read-layer top-1 retrieval accuracy (all zero without a store)."""
         if latent:
-            return latent_loss(model, store.arrays, *batch, hop_weight=args.hop_weight)
+            return latent_loss(model, store_arrays, *batch, hop_weight=args.hop_weight)
         lm = masked_lm_loss(model, *batch)
         return lm, lm, mx.array(0.0), mx.zeros((1,)), mx.zeros((1,))
 
@@ -106,8 +132,8 @@ def train(args) -> None:
     state = [model.state, optimizer.state]
 
     @partial(mx.compile, inputs=state, outputs=state)
-    def step_fn(*batch):
-        (loss, lm, hop, hits, counts), grads = loss_and_grad(*batch)
+    def step_fn(store_arrays, *batch):
+        (loss, lm, hop, hits, counts), grads = loss_and_grad(store_arrays, *batch)
         grads, grad_norm = optim.clip_grad_norm(grads, args.grad_clip)
         optimizer.update(model, grads)
         return loss, lm, hop, hits, counts, grad_norm
@@ -118,14 +144,14 @@ def train(args) -> None:
         print(format_summary(summary))
 
     print(f"{args.arm}: {model.num_params() / 1e6:.1f}M params, {len(tok)} tokens, mix {mix}, "
-          f"{args.steps} steps × {args.batch_size}×{args.seq_len}")
-    batch = packer.batch()
+          f"{len(datas)} world(s), {args.steps} steps × {args.batch_size}×{args.seq_len}")
+    store_arrays, batch = next_batch()
     t_last, trained_tokens, losses, hits_sum, counts_sum = time.perf_counter(), 0, [], 0, 0
     for step in range(start, args.steps):
-        loss, lm, hop, hits, counts, grad_norm = step_fn(*batch)
+        loss, lm, hop, hits, counts, grad_norm = step_fn(store_arrays, *batch)
         mx.async_eval(loss, lm, hop, hits, counts, grad_norm, state)
         trained_tokens += int(batch[2].sum().item())
-        batch = packer.batch()  # build the next batch while this step runs
+        store_arrays, batch = next_batch()  # build the next batch while this step runs
         losses.append((loss.item(), lm.item(), hop.item()))
         hits_sum, counts_sum = hits_sum + hits, counts_sum + counts
 
@@ -148,13 +174,13 @@ def train(args) -> None:
                   f"lr {rec['lr']:.2e} {rec['tok_per_s']:,.0f} tok/s ({rec['trained_frac']:.0%} trained)", flush=True)
             t_last, trained_tokens, losses, hits_sum, counts_sum = time.perf_counter(), 0, [], 0, 0
         if args.save_every and (step + 1) % args.save_every == 0:
-            checkpoint.save(run, "latest", model, optimizer, {"step": step + 1, "sampler": sampler.state()})
+            checkpoint.save(run, "latest", model, optimizer, train_state(step + 1))
         if args.eval_every and (step + 1) % args.eval_every == 0 and step + 1 != args.steps:
             run_eval(step + 1)
             t_last = time.perf_counter()
 
     checkpoint.save(run, "final", model)
-    checkpoint.save(run, "latest", model, optimizer, {"step": args.steps, "sampler": sampler.state()})
+    checkpoint.save(run, "latest", model, optimizer, train_state(args.steps))
     if args.eval_every:
         run_eval(args.steps)
     print(f"saved {run}/checkpoints/final")
@@ -163,7 +189,9 @@ def train(args) -> None:
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--arm", choices=sorted(ARMS), required=True)
-    p.add_argument("--data", required=True, help="built world directory (synth/build.py)")
+    p.add_argument("--data", required=True,
+                   help="built world directory (synth/build.py), or a comma list for multi-world training "
+                        "(the first is evaluated and gets --edits)")
     p.add_argument("--out", required=True, help="run directory")
     p.add_argument("--edits", type=int, default=0, help="train on the world with this many edits applied")
     p.add_argument("--mix", default=None, help="sources and weights, e.g. bios=0.5,qa=0.5 (default: per arm)")
@@ -190,7 +218,9 @@ def main() -> None:
     g.add_argument("--n-reads", type=int, default=3, help="read layers (one per hop)")
     g.add_argument("--top-k", type=int, default=4, help="store entries retrieved per read")
     g.add_argument("--hop-weight", type=float, default=0.5, help="weight of the retrieval-supervision loss (0 = off)")
-    g.add_argument("--max-supervision", type=int, default=512, help="supervised retrieval slots per batch")
+    g.add_argument("--max-supervision", type=int, default=1024, help="supervised retrieval slots per batch")
+    g.add_argument("--supervise", choices=("all", "first"), default="all",
+                   help="supervise retrieval at every position writing a name token, or only before its first")
     train(p.parse_args())
 
 

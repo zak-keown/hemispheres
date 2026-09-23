@@ -15,6 +15,9 @@ it must produce itself.
 
 Examples also record retrieval supervision for latent-store models: at token
 position `pos`, read layer `hop` should retrieve the fact (subject, relation).
+Supervision covers every position that writes a token of the object (or
+answer) name; `offset` is the index of the name token written next, so
+offset 0 is the position just before the name starts.
 """
 
 import random
@@ -29,7 +32,7 @@ class Example:
     tokens: list[str] = field(default_factory=list)
     mask: list[int] = field(default_factory=list)  # 1 = counts toward the loss
     meta: dict = field(default_factory=dict)
-    supervision: list[tuple[int, int, str, str]] = field(default_factory=list)  # (pos, hop, subject, relation)
+    supervision: list[tuple[int, int, str, str, int]] = field(default_factory=list)  # (pos, hop, subject, relation, offset)
 
     def add(self, tokens, trainable: bool = True) -> None:
         tokens = list(tokens)
@@ -97,8 +100,8 @@ def statement(ex: Example, world: World, subject: str, relation: str, rng: rando
               lookup: bool = False, trainable: bool = True) -> None:
     """One fact as a sentence, with a random template.
 
-    When the subject precedes the object, the token just before the object is
-    where a latent-store model should retrieve the fact.
+    When the subject precedes the object, a latent-store model should retrieve
+    the fact at every position that writes an object token.
     """
     s, o = world.surface(subject), world.surface(world.facts[(subject, relation)])
     template = rng.choice(RELATIONS[relation].sentences)
@@ -108,7 +111,7 @@ def statement(ex: Example, world: World, subject: str, relation: str, rng: rando
 
     def obj(e: Example) -> None:
         if "{s}" in template.split()[:template.split().index("{o}")]:
-            e.supervision.append((len(e.tokens) - 1, 0, subject, relation))
+            e.supervision += [(len(e.tokens) - 1 + i, 0, subject, relation, i) for i in range(len(o))]
         e.add(o, trainable)
 
     _fill(ex, template, {"s": s, "o": obj}, trainable)
@@ -157,7 +160,9 @@ def qa(world: World, subject: str, path: tuple[str, ...], rng: random.Random, st
     elif style not in ("direct", "lookup"):
         raise ValueError(f"unknown style {style!r}")
     ex.add(question_tokens(world, subject, path, rng), trainable=False)
-    ex.supervision += [(len(ex.tokens) - 1, hop, s, r) for hop, (s, r, _) in enumerate(hops)]
+    start = len(ex.tokens) - 1  # the "A:" token, which predicts the first answer token
+    ex.supervision += [(start + i, hop, s, r, i) for i in range(len(world.surface(answer)))
+                       for hop, (s, r, _) in enumerate(hops)]
     if style == "lookup":
         for s, r, o in hops:
             emit_lookup(ex, world.surface(s), r, world.surface(o))

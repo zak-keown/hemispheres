@@ -72,11 +72,11 @@ def test_forward_and_loss_train_queries_and_keys(data, model):
         assert mx.abs(g[name]).sum().item() > 0, name
 
 
-def _supervised(data, mix):
+def _supervised(data, mix, supervise="first"):
     tok = Tokenizer(data.vocab)
     store = Store(data.world, tok)
     packer = Packer(ExampleSampler(data, "latent", parse_mix(mix, "latent"), seed=3), tok, batch_size=4,
-                    seq_len=128, store=store, n_reads=3, max_supervision=512)
+                    seq_len=128, store=store, n_reads=3, max_supervision=4096, supervise=supervise)
     _, targets, _, sup_idx, sup_fact, sup_valid = packer.batch()
     slots = [(h, r, p, f) for (h, r, p), f, v in zip(sup_idx.tolist(), sup_fact.tolist(), sup_valid.tolist()) if v]
     assert slots
@@ -103,6 +103,26 @@ def test_qa_supervision_is_one_fact_per_hop_ending_at_the_answer(data):
             assert data.world.facts[(s1, r1)] == s2  # each hop starts where the last one ended
         answer = data.world.facts[chain[-1]]
         assert tok.vocab[targets[row][pos]] == data.world.surface(answer)[0]
+
+
+def test_supervise_all_covers_every_token_of_every_name(data):
+    for mix in ("bios=1", "qa=1"):
+        tok, store, targets, slots = _supervised(data, mix, supervise="all")
+        runs = {}
+        for hop, row, pos, fact in slots:
+            runs.setdefault((row, fact, hop), []).append(pos)
+        finals = {}
+        for (row, fact, hop), positions in runs.items():
+            finals.setdefault(row, []).append((fact, hop, sorted(positions)))
+        for row, entries in finals.items():
+            for fact, hop, positions in entries:
+                # Consecutive positions; the last hop's object is what gets written there.
+                assert positions == list(range(positions[0], positions[0] + len(positions)))
+                last = max(h for f, h, p in entries if p == positions)
+                final_fact = next(f for f, h, p in entries if p == positions and h == last)
+                name = data.world.surface(data.world.facts[store.facts[final_fact]])
+                assert len(positions) == len(name)
+                assert [tok.vocab[targets[row][q]] for q in positions] == list(name)
 
 
 def test_untrained_latent_model_evaluates(data, model):
@@ -193,3 +213,44 @@ def test_latent_training_runs_end_to_end(data, tmp_path, monkeypatch):
     logs = [json.loads(line) for line in (out / "metrics.jsonl").read_text().splitlines()]
     assert any("retrieval_top1" in r for r in logs) and any("eval" in r for r in logs)
     assert (out / "checkpoints" / "final" / "model.safetensors").exists()
+
+
+def test_padding_a_store_changes_nothing(data, model):
+    tok = Tokenizer(data.vocab)
+    plain, padded = Store(data.world, tok), Store(data.world, tok, size=len(data.world.facts) + 300)
+    ids = mx.array([tok.encode(["[BOS]", "Q:", "What", "is"])], dtype=mx.int32)
+    a, qa_, ka = model.forward(ids, plain.arrays)
+    b, qb, kb = model.forward(ids, padded.arrays)
+    assert mx.allclose(a, b, atol=1e-5).item()
+    assert mx.allclose(kb[:len(plain)], ka, atol=1e-6).item()
+    # Even a query aimed straight at a padding entry never retrieves it.
+    q = kb[len(plain) + 5][None, None, :] * 100
+    assert (model.reads[0].retrieve(q, kb, padded.arrays["bias"]) < len(plain)).all().item()
+
+
+def _world_dir(root, name, index):
+    from pathlib import Path
+    d = Path(root) / name
+    d.mkdir()
+    w = generate_world(name, index, sizes=WorldSizes(persons=150, companies=15, universities=4, cities=10, countries=3))
+    (d / "world.json").write_text(json.dumps(w.to_json()))
+    (d / "vocab.json").write_text(json.dumps(vocabulary()))
+    (d / "splits.json").write_text(json.dumps({s: [list(q) for q in qs] for s, qs in make_splits(w).items()}))
+    return d
+
+
+@pytest.mark.parametrize("arm", ["latent", "dense"])
+def test_multi_world_training_and_resume(tmp_path, monkeypatch, arm):
+    from hemispheres import train
+    worlds = ",".join(str(_world_dir(tmp_path, n, i)) for n, i in (("a", 0), ("p3", 3), ("p4", 4)))
+    out = tmp_path / "run"
+    common = ["train", "--arm", arm, "--data", worlds, "--out", str(out), "--size", "tiny", "--batch-size", "2",
+              "--seq-len", "128", "--log-every", "1", "--eval-every", "0", "--save-every", "2", "--warmup", "1"]
+    monkeypatch.setattr("sys.argv", common + ["--steps", "4"])
+    train.main()
+    monkeypatch.setattr("sys.argv", common + ["--steps", "6", "--resume"])
+    train.main()
+    steps = [json.loads(line)["step"] for line in (out / "metrics.jsonl").read_text().splitlines()]
+    assert steps == [1, 2, 3, 4, 5, 6]
+    config = json.loads((out / "config.json").read_text())
+    assert config["data"] == worlds

@@ -88,4 +88,14 @@ A dense model can only learn a new world or edits by further training. This is i
     --mix edit_facts=1,edit_qa=1 --steps 200 --eval-sets direct,ripple,locality --out runs/dense-a-k100
 ```
 
+**Latent-arm options.**
+- `--supervise all|first` supervises retrieval at every position that writes a name token (default), or only before each name starts.
+- `--data` also takes a comma list of worlds for multi-world training. Each step draws its batch and its store from one world, and the first world is the one evaluated during training. A training pool disjoint from worlds B and C:
+
+```sh
+for idx in 3 4 5 6 7; do for seed in 0 1 2; do
+  .venv/bin/python -m hemispheres.synth.build --name w$idx-s$seed --index $idx --seed $seed --out-dir data/pool
+done; done
+```
+
 Scoring is exact match on generated text, never token-by-token scoring. For the lookup arm, `trace` also reports whether every lookup queried the right (subject, relation). Defaults: `small` model (29M), fp32, batch 64 × 256 tokens, 10k steps, AdamW with warmup and cosine decay. Runs checkpoint every 2k steps, and `--resume` continues one.

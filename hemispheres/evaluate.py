@@ -127,7 +127,9 @@ def retrieval_diagnostics(model, store: Store, tok: Tokenizer, data: WorldData, 
         layers = []
         for read, q in zip(model.reads, queries):
             q = q[rows, last]                                            # (b, dk)
-            layers.append((mx.argmax(q @ keys.T, axis=-1).tolist(), read.retrieve(q[:, None, :], keys)[:, 0].tolist()))
+            bias = store.arrays["bias"]
+            layers.append((mx.argmax(q @ keys.T + bias, axis=-1).tolist(),
+                           read.retrieve(q[:, None, :], keys, bias)[:, 0].tolist()))
         for j, question in enumerate(questions[c:c + batch_size]):
             gold = [store.index[(s, r)] for s, r, _ in data.world.chain(question.subject, question.path)]
             gold = gold[:len(layers)]

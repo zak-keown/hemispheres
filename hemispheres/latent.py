@@ -79,7 +79,7 @@ class KeyEncoder(nn.Module):
     def __call__(self, wte: nn.Embedding, store: dict) -> mx.array:
         e = wte(store["subj"]) + self.pos.weight
         m = store["subj_mask"][..., None]
-        pooled = (e * m).sum(axis=1) / m.sum(axis=1)
+        pooled = (e * m).sum(axis=1) / mx.maximum(m.sum(axis=1), 1.0)  # padding entries have no tokens
         return self.out(nn.gelu_approx(self.fc(self.norm(pooled + self.rel(store["rel"])))))
 
 
@@ -99,11 +99,16 @@ class ReadLayer(nn.Module):
         self.null_logit = mx.zeros((cfg.n_head,))
         self.null_value = mx.zeros((cfg.n_head, cfg.head_dim))
 
-    def retrieve(self, q: mx.array, keys: mx.array) -> mx.array:
-        """Indices (B, T, k) of the exact top-k entries for each position; no gradient."""
+    def retrieve(self, q: mx.array, keys: mx.array, bias: mx.array | None = None) -> mx.array:
+        """Indices (B, T, k) of the exact top-k entries for each position; no gradient.
+
+        `bias` (N,) is added to every position's scores (-1e9 excludes padding entries).
+        """
         B, T, dk = q.shape
         flat, kt = mx.stop_gradient(q).reshape(-1, dk), mx.stop_gradient(keys).T
-        chunks = [top_k_indices(flat[c:c + self.cfg.retrieval_chunk] @ kt, self.cfg.top_k, self.cfg.retrieval_group)
+        bias = 0.0 if bias is None else bias
+        chunks = [top_k_indices(flat[c:c + self.cfg.retrieval_chunk] @ kt + bias, self.cfg.top_k,
+                                self.cfg.retrieval_group)
                   for c in range(0, flat.shape[0], self.cfg.retrieval_chunk)]
         return mx.concatenate(chunks, axis=0).reshape(B, T, self.cfg.top_k)
 
@@ -121,7 +126,7 @@ class ReadLayer(nn.Module):
         H, dh, k, L = self.n_head, self.head_dim, self.cfg.top_k, MAX_NAME_LEN
         x = self.norm(h)
         query = self.query(x)                                            # (B, T, dk)
-        idx = self.retrieve(query, keys)                                 # (B, T, k)
+        idx = self.retrieve(query, keys, store.get("bias"))              # (B, T, k)
         score = (query[:, :, None, :] * keys[idx]).sum(-1) / math.sqrt(self.cfg.key_dim)  # (B, T, k)
 
         ids = store["val"][idx].reshape(B, T, k * L)                     # token ids of retrieved names
@@ -194,7 +199,7 @@ def latent_loss(model: LatentGPT, store: dict, inputs: mx.array, targets: mx.arr
     ce = nn.losses.cross_entropy(logits.astype(mx.float32), targets, reduction="none")
     lm = (ce * weights).sum() / mx.maximum(weights.sum(), 1.0)
     q = mx.stack(queries)[sup_idx[:, 0], sup_idx[:, 1], sup_idx[:, 2]]      # (S, dk): [hop, row, pos]
-    nce_logits = (q @ keys.T).astype(mx.float32) / math.sqrt(model.cfg.key_dim)
+    nce_logits = (q @ keys.T).astype(mx.float32) / math.sqrt(model.cfg.key_dim) + store["bias"]
     nce_ce = nn.losses.cross_entropy(nce_logits, sup_fact, reduction="none")
     nce = (nce_ce * sup_valid).sum() / mx.maximum(sup_valid.sum(), 1.0)
     hit = (mx.argmax(nce_logits, axis=-1) == sup_fact).astype(mx.float32) * sup_valid

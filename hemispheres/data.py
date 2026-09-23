@@ -122,14 +122,20 @@ class Packer:
     With a `store`, batches also carry retrieval supervision: up to
     `max_supervision` (hop, row, position) slots, each with the store index of
     the fact read layer `hop` should retrieve there, and a validity flag.
+    `supervise="first"` keeps only the position before each name starts;
+    "all" keeps every position that writes a name token.
     """
 
     def __init__(self, sampler: ExampleSampler, tokenizer: Tokenizer, batch_size: int, seq_len: int,
-                 store: Store | None = None, n_reads: int = 0, max_supervision: int = 512):
+                 store: Store | None = None, n_reads: int = 0, max_supervision: int = 1024,
+                 supervise: str = "all"):
+        if supervise not in ("all", "first"):
+            raise ValueError(f"supervise must be 'all' or 'first', not {supervise!r}")
         self.sampler, self.tok = sampler, tokenizer
         self.batch_size, self.seq_len = batch_size, seq_len
         self.pad = tokenizer.token_id(PAD)
         self.store, self.n_reads, self.max_supervision = store, n_reads, max_supervision
+        self.supervise = supervise
         self._pending: Example | None = None
 
     def _next_example(self) -> Example:
@@ -148,7 +154,8 @@ class Packer:
                 break
             if self.store is not None:
                 sup += [(hop, len(ids) + pos, self.store.index[(s, r)])
-                        for pos, hop, s, r in ex.supervision if hop < self.n_reads]
+                        for pos, hop, s, r, offset in ex.supervision
+                        if hop < self.n_reads and (self.supervise == "all" or offset == 0)]
             ids += self.tok.encode(ex.tokens)
             mask += ex.mask
         n_pad = self.seq_len + 1 - len(ids)
