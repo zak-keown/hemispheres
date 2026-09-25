@@ -37,16 +37,22 @@ def world_fingerprint(world_dir: str | Path) -> str:
     return hashlib.sha256("".join(f"{k}:{v}\n" for k, v in sorted(files.items())).encode()).hexdigest()
 
 
-def git(*args: str) -> str | None:
+def git(*args: str, repo: Path = REPO) -> str | None:
     try:
-        return subprocess.run(["git", *args], cwd=REPO, capture_output=True, text=True, check=True).stdout.strip()
+        return subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True, check=True).stdout.strip()
     except (OSError, subprocess.CalledProcessError):
         return None
 
 
-def code_version() -> dict:
-    status = git("status", "--porcelain", "--untracked-files=no")
-    return {"commit": git("rev-parse", "HEAD"), "dirty": bool(status) if status is not None else None}
+def code_version(repo: Path = REPO) -> dict:
+    """The commit, and every file that differs from it: modified tracked files and untracked files
+    that aren't git-ignored (a new module a run imports makes the tree dirty too)."""
+    modified = git("diff", "--name-only", "HEAD", repo=repo)
+    untracked = git("ls-files", "--others", "--exclude-standard", repo=repo)
+    if modified is None or untracked is None:
+        return {"commit": git("rev-parse", "HEAD", repo=repo), "dirty": None}
+    changed = sorted({*modified.splitlines(), *untracked.splitlines()})
+    return {"commit": git("rev-parse", "HEAD", repo=repo), "dirty": bool(changed), "changed": changed}
 
 
 def environment() -> dict:

@@ -123,3 +123,25 @@ def test_fetch_verifies_weights_against_the_records(tmp_path, monkeypatch):
     blob.write_bytes(b"tampered")
     with pytest.raises(SystemExit, match="does not match"):
         records.fetch(["r"], out, tmp_path / "elsewhere")
+
+
+def test_code_version_counts_untracked_files_but_not_ignored_ones(tmp_path):
+    import subprocess
+
+    def run(*args):
+        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
+    run("init", "-q")
+    (tmp_path / ".gitignore").write_text("/runs/\n")
+    (tmp_path / "a.py").write_text("x = 1\n")
+    run("add", ".")
+    run("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init")
+    code_version = records.provenance.code_version
+    assert code_version(tmp_path)["dirty"] is False
+    (tmp_path / "runs").mkdir()
+    (tmp_path / "runs" / "log.txt").write_text("ignored")
+    assert code_version(tmp_path)["dirty"] is False
+    (tmp_path / "new_module.py").write_text("y = 2\n")
+    v = code_version(tmp_path)
+    assert v["dirty"] is True and v["changed"] == ["new_module.py"]
+    (tmp_path / "a.py").write_text("x = 3\n")
+    assert code_version(tmp_path)["changed"] == ["a.py", "new_module.py"]
