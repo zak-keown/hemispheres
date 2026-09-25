@@ -165,3 +165,7 @@ done; done
 ```
 
 Scoring is exact match on generated text, never token-by-token scoring. For the lookup arm, `trace` also reports whether every lookup queried the right (subject, relation). Defaults: `small` model (29M), fp32, batch 64 × 256 tokens, 10k steps, AdamW with warmup and cosine decay. Runs checkpoint every 2k steps, and `--resume` continues one.
+
+## License
+
+MIT; see [`LICENSE`](LICENSE). The step-1 weights on the Hugging Face Hub are released under the same license.
