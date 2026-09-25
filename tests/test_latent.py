@@ -215,6 +215,21 @@ def test_latent_training_runs_end_to_end(data, tmp_path, monkeypatch):
     assert (out / "checkpoints" / "final" / "model.safetensors").exists()
 
 
+def test_hop_supervision_can_stop_partway(data, tmp_path, monkeypatch):
+    from hemispheres import train
+    out = tmp_path / "run"
+    monkeypatch.setattr("sys.argv", ["train", "--arm", "latent", "--data", str(data.path), "--out", str(out),
+                                     "--size", "tiny", "--steps", "4", "--batch-size", "2", "--seq-len", "128",
+                                     "--log-every", "1", "--eval-every", "0", "--save-every", "0", "--warmup", "1",
+                                     "--hop-until", "2"])
+    train.main()
+    logs = [json.loads(line) for line in (out / "metrics.jsonl").read_text().splitlines()]
+    assert [r["hop_weight"] for r in logs] == [0.5, 0.5, 0.0, 0.0]
+    assert all(r["hop_loss"] > 0 for r in logs)  # still measured after it stops being trained
+    assert all(r["loss"] > r["lm_loss"] for r in logs[:2])
+    assert all(r["loss"] == pytest.approx(r["lm_loss"]) for r in logs[2:])
+
+
 def test_padding_a_store_changes_nothing(data, model):
     tok = Tokenizer(data.vocab)
     plain, padded = Store(data.world, tok), Store(data.world, tok, size=len(data.world.facts) + 300)

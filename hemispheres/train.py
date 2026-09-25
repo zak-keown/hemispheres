@@ -10,6 +10,9 @@
   # the first world is the one evaluated during training
   python -m hemispheres.train --arm latent --data data/world-a,data/pool/w3-s0,data/pool/w4-s0 --out runs/latent-multi
 
+  # Supervise which fact each read layer fetches only for the first 2000 steps
+  python -m hemispheres.train --arm latent --data data/world-a --hop-until 2000 --out runs/latent-a-hop2k
+
   # Updating a dense model is training: continue from its weights on new facts
   python -m hemispheres.train --arm dense --data data/world-b --init runs/dense-a --mix bios=1 \\
       --steps 2000 --out runs/dense-a-to-b
@@ -47,6 +50,11 @@ def make_optimizer(args) -> optim.Optimizer:
     decay = optim.cosine_decay(args.lr, max(args.steps - warmup, 1), end=args.lr * args.min_lr_frac)
     schedule = optim.join_schedules([optim.linear_schedule(0.0, args.lr, warmup), decay], [warmup]) if warmup else decay
     return optim.AdamW(learning_rate=schedule, betas=(0.9, 0.95), weight_decay=args.weight_decay)
+
+
+def hop_weight_at(step: int, args) -> float:
+    """Weight of the retrieval-supervision loss at `step`: --hop-weight, then 0 from --hop-until on."""
+    return args.hop_weight if not args.hop_until or step < args.hop_until else 0.0
 
 
 def log(run: Path, record: dict) -> None:
@@ -120,11 +128,11 @@ def train(args) -> None:
         w = chooser.randrange(len(datas))
         return (stores[w].arrays if latent else {}), packers[w].batch()
 
-    def loss_fn(store_arrays, *batch):
+    def loss_fn(store_arrays, hop_weight, *batch):
         """(total, lm, hop, hop_hits, hop_counts): hop is the retrieval-supervision loss and
         hop_hits/hop_counts give per-read-layer top-1 retrieval accuracy (all zero without a store)."""
         if latent:
-            return latent_loss(model, store_arrays, *batch, hop_weight=args.hop_weight)
+            return latent_loss(model, store_arrays, *batch, hop_weight=hop_weight)
         lm = masked_lm_loss(model, *batch)
         return lm, lm, mx.array(0.0), mx.zeros((1,)), mx.zeros((1,))
 
@@ -132,8 +140,8 @@ def train(args) -> None:
     state = [model.state, optimizer.state]
 
     @partial(mx.compile, inputs=state, outputs=state)
-    def step_fn(store_arrays, *batch):
-        (loss, lm, hop, hits, counts), grads = loss_and_grad(store_arrays, *batch)
+    def step_fn(store_arrays, hop_weight, *batch):
+        (loss, lm, hop, hits, counts), grads = loss_and_grad(store_arrays, hop_weight, *batch)
         grads, grad_norm = optim.clip_grad_norm(grads, args.grad_clip)
         optimizer.update(model, grads)
         return loss, lm, hop, hits, counts, grad_norm
@@ -148,7 +156,8 @@ def train(args) -> None:
     store_arrays, batch = next_batch()
     t_last, trained_tokens, losses, hits_sum, counts_sum = time.perf_counter(), 0, [], 0, 0
     for step in range(start, args.steps):
-        loss, lm, hop, hits, counts, grad_norm = step_fn(store_arrays, *batch)
+        hop_weight = hop_weight_at(step, args)
+        loss, lm, hop, hits, counts, grad_norm = step_fn(store_arrays, mx.array(hop_weight), *batch)
         mx.async_eval(loss, lm, hop, hits, counts, grad_norm, state)
         trained_tokens += int(batch[2].sum().item())
         store_arrays, batch = next_batch()  # build the next batch while this step runs
@@ -164,6 +173,7 @@ def train(args) -> None:
             if latent:
                 rec["lm_loss"] = sum(x[1] for x in losses) / n
                 rec["hop_loss"] = sum(x[2] for x in losses) / n
+                rec["hop_weight"] = hop_weight
                 rec["retrieval_top1"] = [h / c if c else None for h, c in zip(hits_sum.tolist(), counts_sum.tolist())]
             log(run, rec)
             parts = ""
@@ -218,6 +228,8 @@ def main() -> None:
     g.add_argument("--n-reads", type=int, default=3, help="read layers (one per hop)")
     g.add_argument("--top-k", type=int, default=4, help="store entries retrieved per read")
     g.add_argument("--hop-weight", type=float, default=0.5, help="weight of the retrieval-supervision loss (0 = off)")
+    g.add_argument("--hop-until", type=int, default=0,
+                   help="turn the retrieval-supervision loss off from this step on (0 = never)")
     g.add_argument("--max-supervision", type=int, default=1024, help="supervised retrieval slots per batch")
     g.add_argument("--supervise", choices=("all", "first"), default="all",
                    help="supervise retrieval at every position writing a name token, or only before its first")

@@ -73,13 +73,30 @@ These use world-A questions. `--store none` hides every store value, and `--stor
 
 Every store-based model falls to chance without its store, including `latent-a`, which saw only world A. So `latent-a`'s world-swap failure was not memorized *facts*: it had learned how world-A names are *spelled*, not which fact belongs to whom. This is the first evidence in this project that the reasoner can be close to knowledge-free, at least for this entity-level knowledge.
 
+## Hop supervision is necessary
+
+`latent-multi-nohop` repeats `latent-multi` with `--hop-weight 0`: nothing tells a read layer which fact to fetch, so retrieval can only be learned from the next-token loss. It was stopped at step 3,100 of 10,000 because nothing had emerged.
+
+| | latent-multi (hop weight 0.5) | latent-multi-nohop (hop weight 0) |
+|---|---|---|
+| Retrieval top-1, hops 1 / 2 / 3, step 500 | 97 / 45 / 1.5 | 0 / 0 / 0 |
+| Retrieval top-1, hops 1 / 2 / 3, step 3,000 | 99.8 / 98.7 / 98.6 | 0.001 / 0.01 / 0.16 |
+| Training loss, step 3,000 | 0.51 | 1.13 (flat since step ~2,000) |
+| World A at step 2,000: 1 / 2 / 3 hop | ~100 | 8 / 5.5 / 6.5 |
+
+Retrieval stays at chance (1 in 62.6k is 0.0016%). The model ignores the store and does worse than `dense-a`, because world A is only a sixteenth of its training data, so it can't memorize it either. The unused InfoNCE loss, logged but not trained on, rose from 11 to ~90: queries and keys grow without lining up.
+
+The likely cause is the hard top-k. Each read keeps 4 of 62.6k entries, and the retrieval score gets gradient only through the entries it keeps. At initialization the right fact almost never makes the top 4, so its score is never pushed up. This is the standard cold-start problem of learned retrieval (REALM pretrains its retriever for this reason), so more steps would not have fixed it.
+
+**So every step-1 latent result depends on per-hop retrieval labels.** In the toy they are free, because every question is generated from a known chain. They are also free for any training data generated from the knowledge base itself, as in KBLaM and LMLM. Still open: whether the labels are needed only to get retrieval started, and whether retrieval learned on templated questions carries over to other phrasing.
+
 ## What this does and doesn't show
 
-**Shown, in this toy.** A reasoner that retrieves inside its forward pass chains 3 lookups, writes out names it has never seen, and follows 1,000 edits through multi-hop reasoning at 100%, with no retraining. That matches the explicit-lookup ceiling. It also holds no world knowledge of its own. A dense model on the same data cannot compose facts it has memorized (the two-hop curse), and fine-tuning in edits leaves them unpropagated and damages everything else.
+**Shown, in this toy.** Given per-hop retrieval labels during training, a reasoner that retrieves inside its forward pass chains 3 lookups, writes out names it has never seen, and follows 1,000 edits through multi-hop reasoning at 100%, with no retraining. That matches the explicit-lookup ceiling. It also holds no world knowledge of its own. A dense model on the same data cannot compose facts it has memorized (the two-hop curse), and fine-tuning in edits leaves them unpropagated and damages everything else.
 
 **Not shown yet:**
 
-1. **Hop supervision.** Each read layer is trained to fetch a specific hop's fact. Does chaining emerge without it (`--hop-weight 0`)? This is the most important open ablation.
+1. **Training without hop labels.** Without them retrieval never starts (see above). Open: are the labels needed throughout training, or only to get retrieval started?
 2. **Toy difficulty.** Relations use fixed templates, names match store keys exactly, the store is always correct and complete, and no question needs more hops than there are read layers.
 3. **Baselines.** The in-context oracle is broken. It gets 8–15% on 1-hop and does *better* on 3-hop; it trains on only 2% of its tokens. The dense arm gets no hop supervision. The only edit baseline for dense is naive fine-tuning, not MEMIT or AlphaEdit.
 4. **Deletion.** Not measured yet. The leakage results suggest that deleting an entry leaves nothing behind, but that needs its own test.
@@ -87,7 +104,7 @@ Every store-based model falls to chance without its store, including `latent-a`,
 
 ## Next
 
-1. `latent-multi` with `--hop-weight 0`.
+1. `latent-multi` with hop supervision for the first 2,000 steps only (`--hop-until 2000`).
 2. Harder toy: paraphrased and unseen relation phrasings, noisy name mentions, missing facts (abstain), 4-hop questions with 3 read layers.
 3. Fix the context oracle.
 4. A deletion test, plus a MEMIT/AlphaEdit baseline (EasyEdit, on a rented GPU).

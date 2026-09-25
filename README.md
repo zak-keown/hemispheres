@@ -4,6 +4,46 @@ An LLM that splits **reasoning** from **knowledge**. A knowledge-light reasoner 
 
 Start with [`research/BRIEF.md`](research/BRIEF.md). It covers prior art, the gap, the strongest case against the idea, and the experiment plan. The detailed literature reviews are in [`research/tracks/`](research/tracks/).
 
+## Results so far (step 1: synthetic worlds)
+
+Exact-match accuracy in %, 300–900 questions per cell. All models are ~29M parameters, trained from scratch for 10k steps on an M5 Max. Full numbers, setup and caveats are in [`research/results-step1.md`](research/results-step1.md).
+
+| Test | dense | dense + fine-tune on edits | lookup | **latent** |
+|---|---|---|---|---|
+| World A, 1 hop, held-out people | 100 | — | 100 | **100** |
+| World A, 2 / 3 hops, held-out people | 5.5 / 7.5 | — | 100 / 100 | **100 / 100** |
+| 100 edits: the edited fact | 0 | 100 | 100 | **100** |
+| 100 edits: ripple (multi-hop through an edit) | 2.2 | 14.6 | 100 | **100** |
+| 100 edits: locality (untouched questions) | 33 | 9.2 | 100 | **100** |
+| 1,000 edits: ripple | 2.0 | — | 100 | **100** |
+| Unseen world B, all hops | 1.1 | — | 99.6 | **100** |
+| Unseen world C, all hops | — | — | 99.7 | **100** |
+| Store values hidden (lower is better) | n/a | n/a | 0 | **1–2** |
+
+### How to read the table
+
+- **Each cell** is the share of questions answered exactly right. The whole generated answer must match; there is no partial credit.
+- **The columns are where the facts live.**
+  - `dense`: in the weights, like a normal LLM. This is the baseline to beat.
+  - `dense + fine-tune on edits`: `dense` trained for 200 more steps on the 100 edited facts. This is the usual way to update a model.
+  - `lookup`: in a separate store. The model writes visible `[LOOKUP] subject @relation` calls and the store fills in the answer. This is the ceiling: an explicit tool call per hop.
+  - **`latent`**: in a separate store, read *inside* the forward pass, with no lookup tokens. This is the idea being tested. The column shows the headline run, `latent-multi`.
+- **The rows test different things.**
+  - **Held-out people**: people who appear in no multi-hop training question, so a right answer means the model composed facts rather than recalled a memorized answer. A "hop" is one fact in the chain, e.g. "the capital of the country of X's birthplace" is 3 hops.
+  - **Edits** change facts in the store, or in the weights for `dense + fine-tune`. A good edit scores 100 on all three rows: the edited fact itself, multi-hop questions that pass through it (ripple), and questions it shouldn't affect (locality).
+  - **Unseen world B / C**: swap in the store of a world the model never trained on, with all-new people, companies and places. A high score means reasoning and knowledge really are separate.
+  - **Store values hidden**: the same world-A questions with the store emptied. Near 0 means the reasoner holds almost no facts of its own. Lower is better here.
+- **"—"** means not run. A dense model can only learn a new world by retraining.
+
+**The short version:** `dense` can't chain facts it memorized (the "two-hop curse"), and fine-tuning in edits barely propagates them and damages unrelated knowledge. `latent` matches the explicit-lookup ceiling everywhere, without writing any lookup calls.
+
+### What failed, and the caveats
+
+- **Without per-hop retrieval labels, the latent arm never learns to retrieve.** Every `latent` result above uses a training loss that tells each read layer which fact to fetch. With that loss switched off, retrieval stayed at chance (0.0016%) after 3,100 steps and the run was stopped. The labels come free with any training data generated from the knowledge base, but whether they're needed throughout training, or only to get retrieval started, is the next experiment.
+- **The first latent model scored 42% on unseen world B.** It retrieved the right fact but misspelled names it had never seen, completing them from world-A spelling patterns. Supervising retrieval at every name token raised this to 86%. Training across 16 worlds raised it to 100%.
+- **The in-context oracle arm (`context`) is broken:** 8–15% on 1-hop questions. It's left out of the table until it's fixed.
+- **This is a toy.** Questions use fixed templates, names match store keys exactly, the store is always complete and correct, and no question needs more hops than the model has read layers. The latent arm has 14% more parameters than the baselines, and the only edit baseline is naive fine-tuning, not MEMIT or AlphaEdit.
+
 ## Layout
 
 | Path | What |
