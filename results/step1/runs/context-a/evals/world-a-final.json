@@ -1,0 +1,71 @@
+{
+  "args": {
+    "run": "runs/context-a",
+    "checkpoint": "final",
+    "data": "data/world-a",
+    "edits": 0,
+    "sets": "test_id,test_ood,test_1hop_ood",
+    "n": 200,
+    "seed": 0,
+    "name": null,
+    "store": null
+  },
+  "provenance": {
+    "time": "2026-09-25T14:56:41+00:00",
+    "code": {
+      "commit": "8e40d3a9900d74a96276e400a6c9d51250605fd0",
+      "dirty": true
+    },
+    "env": {
+      "python": "3.12.14",
+      "platform": "macOS-27.0-arm64-arm-64bit",
+      "machine": "arm64",
+      "mlx": "0.32.2",
+      "device": "Device(gpu, 0)"
+    },
+    "data": {
+      "data/world-a": "befab6f0a218e36f48e7ae53539eef4e3fe9fab49eaae9a2d603ee01b86df106"
+    },
+    "checkpoint_sha256": "ae48aaa6bc50869386a3a0892576d33c5a69ca5fda2dc4c396a36d525ee18d20"
+  },
+  "summary": {
+    "test_1hop_ood": {
+      "1hop": {
+        "acc": 0.215,
+        "n": 200
+      },
+      "all": {
+        "acc": 0.215,
+        "n": 200
+      }
+    },
+    "test_id": {
+      "2hop": {
+        "acc": 0.43,
+        "n": 200
+      },
+      "3hop": {
+        "acc": 0.61,
+        "n": 200
+      },
+      "all": {
+        "acc": 0.52,
+        "n": 400
+      }
+    },
+    "test_ood": {
+      "2hop": {
+        "acc": 0.46,
+        "n": 200
+      },
+      "3hop": {
+        "acc": 0.635,
+        "n": 200
+      },
+      "all": {
+        "acc": 0.5475,
+        "n": 400
+      }
+    }
+  }
+}

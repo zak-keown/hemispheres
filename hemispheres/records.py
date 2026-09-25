@@ -148,7 +148,7 @@ def model_card(weights: dict, out: Path) -> str:
         sha = next(iter(files.values()))["sha256"][:12]
         rows.append(f"| `{name}` | {config['arm']} | {config['params'] / 1e6:.1f}M | {tags} | `{sha}` |")
     return "\n".join([
-        "---", "library_name: mlx", "tags: [mlx, knowledge-editing, retrieval, synthetic-data]", "---", "",
+        "---", "license: mit", "library_name: mlx", "tags: [mlx, knowledge-editing, retrieval, synthetic-data]", "---", "",
         "# Hemispheres: step-1 checkpoints", "",
         "Weights for the step-1 synthetic-world runs of Hemispheres, a language model that keeps its knowledge in a "
         "separate, editable store and reads it inside the forward pass. Each run directory holds `config.json` "
@@ -164,7 +164,7 @@ def model_card(weights: dict, out: Path) -> str:
         "```", "",
         "Models are 25.5M (dense, lookup, context) or 29.2M (latent) parameters, fp32, trained from scratch on "
         "generated worlds. They are research artifacts for the synthetic task, not general-purpose language models.",
-        ""])
+        "", "Released under the MIT license (see `LICENSE`).", ""])
 
 
 def fetch(names: list[str], out: Path, dest: Path) -> None:

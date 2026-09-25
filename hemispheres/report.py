@@ -277,6 +277,37 @@ def integrity(runs: dict[str, Run]) -> tuple[int, list[str]]:
     return checked, bad
 
 
+def reevaluations(runs: dict[str, Run]) -> tuple[list[str], int, list[str]]:
+    """Evaluations logged during training, compared with later reruns of the same checkpoint on the
+    same questions: (runs compared, cells that agree, disagreements)."""
+    compared, agree, differ = [], 0, []
+    for r in runs.values():
+        c = r.config
+        latest = c["steps"] if r.last_step >= c["steps"] else r.last_step // c["save_every"] * c["save_every"]
+        tags = {"final": c["steps"] if r.last_step >= c["steps"] else None, "latest": latest}
+        for name, (ev, _) in r.evals.items():
+            a = ev["args"]
+            if ("step" in a or Path(a["data"]).name != r.world or a.get("edits", 0) != c.get("edits", 0)
+                    or a.get("store") is not None or a.get("seed", 0) != c["seed"]):
+                continue
+            logged = next((m for m in r.metrics if "eval" in m and m["step"] == tags.get(a.get("checkpoint"))), None)
+            if logged is None:
+                continue
+            for s, groups in logged["eval"].items():
+                for key, v in groups.items():
+                    rerun = ev["summary"].get(s, {}).get(key)
+                    if rerun is None or rerun["n"] != v["n"]:
+                        continue  # a different question sample
+                    if r.name not in compared:
+                        compared.append(r.name)
+                    if abs(rerun["acc"] - v["acc"]) < 1e-9:
+                        agree += 1
+                    else:
+                        differ.append(f"{r.name} {s} {key}: logged {pct(v['acc'])} at step {logged['step']}, "
+                                      f"rerun {pct(rerun['acc'])} (`evals/{name}.json`, n={v['n']})")
+    return compared, agree, differ
+
+
 # ---------------------------------------------------------------- reproduction commands
 
 def flag(k: str, v) -> str:
@@ -345,6 +376,15 @@ def reproduce_script(runs: dict[str, Run], worlds: dict, weights: dict | None = 
 
 # ---------------------------------------------------------------- report
 
+def reevaluation_lines(runs: dict[str, Run]) -> list[str]:
+    compared, agree, differ = reevaluations(runs)
+    if not compared:
+        return ["- No evaluation logged during training has been rerun yet."]
+    head = (f"- Evaluations logged during training, rerun from the saved checkpoint on the same questions "
+            f"({', '.join(compared)}): {agree} of {agree + len(differ)} cells identical")
+    return [head + ("." if not differ else ". These differ:"), *[f"  - {d}" for d in differ]]
+
+
 def report(runs: dict[str, Run], worlds: dict, runs_dir: Path, weights: dict | None = None) -> str:
     main, cells = main_table(runs)
     checked, bad = integrity(runs)
@@ -396,6 +436,7 @@ def report(runs: dict[str, Run], worlds: dict, runs_dir: Path, weights: dict | N
         f"- {checked} evaluation files: every summary recounted from its per-question records "
         + ("matches." if not bad else f"has {len(bad)} problem(s):"),
         *[f"  - {b}" for b in bad],
+        *reevaluation_lines(runs),
         f"- {len(logged)} cells come from logged summaries only (†)" + (
             ": rerun those evaluations with `python -m hemispheres.evaluate` to get per-question records."
             if logged else "."),

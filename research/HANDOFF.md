@@ -10,7 +10,7 @@ Read this first, then `research/results-step1.md` (all numbers) and `research/BR
 
 ## Git
 
-- HEAD is `910fcdb`, pushed to github.com/zak-keown/hemispheres (private).
+- HEAD is `910fcdb`, pushed to github.com/zak-keown/hemispheres (public, MIT).
 - **Not committed yet** (the user asks before each commit; commit only when asked):
   - `hemispheres/train.py`: the `--hop-until N` flag, which stops hop supervision from step N on. The weight is passed into the compiled step as an array, so switching it doesn't recompile. `hop_weight` is logged in `metrics.jsonl`.
   - `tests/test_latent.py`: `test_hop_supervision_can_stop_partway`. All 41 tests pass (`.venv/bin/python -m pytest -q`).
@@ -58,27 +58,15 @@ To watch progress, read `runs/latent-multi-hop2k/metrics.jsonl`, which holds `re
 - **Retrieval drifts down after step 2,000:** the model needs the labels throughout training. Then try the small, growing store (below) or keep a small hop weight.
 - **Either way:** compare with `latent-multi` (`runs/latent-multi/metrics.jsonl`, `evals/`) and add a row to `results-step1.md`.
 
-## Backfill: per-question records for the † cells (not started, ~15 min of GPU)
+## Backfill: done (2026-09-25)
 
-`results/step1/REPORT.md` marks 29 cells with †. They come from summaries logged during training: the world-A held-out results, `dense-a-k100` and `dense-a-to-b`. Those evaluations kept no per-question records. These evaluations use the same checkpoints and the same question sample (`split_questions` seeds on split and seed), so they should reproduce the logged numbers exactly. If a number changes, say so; don't just regenerate the docs. Run the queue only when the GPU is idle:
-
-```zsh
-PY=.venv/bin/python; q() { grep --line-buffered -v MallocStackLogging; }
-for r in lookup-a dense-a context-a latent-a latent-a-all latent-multi; do
-  $PY -m hemispheres.evaluate --run runs/$r --data data/world-a --sets test_id,test_ood,test_1hop_ood --n 200 2>&1 | q | sed -n 1,4p
-done
-$PY -m hemispheres.evaluate --run runs/latent-multi-nohop --checkpoint latest --data data/world-a --sets test_id,test_ood,test_1hop_ood --n 200 2>&1 | q | sed -n 1,4p
-$PY -m hemispheres.evaluate --run runs/dense-a-k100 --data data/world-a --edits 100 --n 500 2>&1 | q | sed -n 1,4p
-$PY -m hemispheres.evaluate --run runs/dense-a-to-b --data data/world-b --sets all --n 300 2>&1 | q | sed -n 1,2p
-$PY -m hemispheres.records export runs/{lookup-a,dense-a,context-a,latent-a,latent-a-all,latent-multi,latent-multi-nohop,dense-a-k100,dense-a-to-b}
-$PY -m hemispheres.report && git diff --stat results/step1/REPORT.md
-```
+The 29 cells in `REPORT.md` that came only from summaries logged during training now have per-question records. These were the world-A held-out results, `dense-a-k100` and `dense-a-to-b`. They were rerun from the saved checkpoints on the same questions: 74 of 74 logged cells came out identical, so evaluation is deterministic here. The report's Integrity section repeats this comparison whenever a logged evaluation is rerun.
 
 ## Records
 
 - **Every step-1 number traces to committed records** in `results/step1/`: configs, metrics, logs, per-question evaluation outputs, checkpoint hashes and world fingerprints.
 - **`REPORT.md` and `reproduce.sh` are generated** by `python -m hemispheres.report`. `tests/test_records.py` fails if they're stale.
-- **Weights** are on the Hub at `hemisphere-llm/hemispheres-step1` (private for now). `results/step1/weights.json` pins the commit. `records fetch <run>` downloads a run and checks each file's hash.
+- **Weights** are on the Hub at `hemisphere-llm/hemispheres-step1` (public, MIT). `results/step1/weights.json` pins the commit. `records fetch <run>` downloads a run and checks each file's hash.
 - **After every new run or evaluation**, run `python -m hemispheres.records export runs/<run>`. After a new run, also run `records upload runs/<run>` (it needs `pip install -e '.[hub]'` and the `HF_TOKEN`). Then run `python -m hemispheres.report`.
 - **Runs now record themselves:** the git commit (and whether the tree was dirty), environment and data fingerprints go in `config.json` and each eval's `.json`. The evaluations run during training also save their per-question records to `evals/<world>-step<N>.jsonl`.
 

@@ -69,6 +69,10 @@ def test_train_export_verify_and_report(tmp_path, monkeypatch):
     assert ev["provenance"]["checkpoint_sha256"] == records.provenance.sha256(
         run / "checkpoints" / "final" / "model.safetensors")
 
+    # Rerunning the evaluation logged at the last step reproduces it exactly.
+    monkeypatch.setattr("sys.argv", ["evaluate", "--run", str(run), "--data", "data/world-a", "--n", "2"])
+    evaluate.main()
+
     out = Path("results/step1")
     records.export(run, out)
     meta = json.loads((out / "runs" / run.name / "provenance.json").read_text())
@@ -80,7 +84,9 @@ def test_train_export_verify_and_report(tmp_path, monkeypatch):
     assert not records.verify_data(["data/world-a"], out)
 
     runs = report.load_runs(out / "runs")
-    assert report.integrity(runs) == (2, [])
+    assert report.integrity(runs) == (3, [])
+    compared, agree, differ = report.reevaluations(runs)
+    assert compared == ["latent-t"] and agree >= 6 and differ == []
     cell = runs["latent-t"].cell("world-b", ("all",))
     assert cell.source == "evals/world-b-final.jsonl" and not cell.logged
     worlds = json.loads((out / "worlds.json").read_text())

@@ -41,36 +41,45 @@ PYTHON="${PYTHON:-.venv/bin/python}"
 "$PYTHON" -m hemispheres.train --arm dense --data data/world-b --out runs/dense-a-to-b --edits 0 --mix bios=1 --init runs/dense-a --init-checkpoint final --size small --dtype float32 --steps 2000 --batch-size 64 --seq-len 256 --lr 0.0003 --min-lr-frac 0.1 --warmup 100 --weight-decay 0.1 --grad-clip 1.0 --log-every 100 --eval-every 2000 --eval-sets all --eval-n 300 --save-every 0 --seed 0
 
 # 3. Evaluations
+"$PYTHON" -m hemispheres.evaluate --run runs/context-a --checkpoint final --data data/world-a --sets test_id,test_ood,test_1hop_ood --n 200 --seed 0
 "$PYTHON" -m hemispheres.evaluate --run runs/context-a --checkpoint final --data data/world-a --edits 100 --n 500 --seed 0
 "$PYTHON" -m hemispheres.evaluate --run runs/context-a --checkpoint final --data data/world-a --edits 1000 --n 500 --seed 0
 "$PYTHON" -m hemispheres.evaluate --run runs/context-a --checkpoint final --data data/world-b --sets all --n 300 --seed 0
+"$PYTHON" -m hemispheres.evaluate --run runs/dense-a --checkpoint final --data data/world-a --sets test_id,test_ood,test_1hop_ood --n 200 --seed 0
 "$PYTHON" -m hemispheres.evaluate --run runs/dense-a --checkpoint final --data data/world-a --edits 100 --n 500 --seed 0
 "$PYTHON" -m hemispheres.evaluate --run runs/dense-a --checkpoint final --data data/world-a --edits 1000 --n 500 --seed 0
 "$PYTHON" -m hemispheres.evaluate --run runs/dense-a --checkpoint final --data data/world-b --sets all --n 300 --seed 0
+"$PYTHON" -m hemispheres.evaluate --run runs/latent-a --checkpoint final --data data/world-a --sets test_id,test_ood,test_1hop_ood --n 200 --seed 0
 "$PYTHON" -m hemispheres.evaluate --run runs/latent-a --checkpoint final --data data/world-a --edits 100 --n 500 --seed 0
 "$PYTHON" -m hemispheres.evaluate --run runs/latent-a --checkpoint final --data data/world-a --edits 1000 --n 500 --seed 0
 "$PYTHON" -m hemispheres.evaluate --run runs/latent-a --checkpoint final --data data/world-a --sets test_id,test_1hop_ood --n 300 --seed 0 --store none
 "$PYTHON" -m hemispheres.evaluate --run runs/latent-a --checkpoint final --data data/world-a --sets test_id,test_1hop_ood --n 300 --seed 0 --store data/world-c
 "$PYTHON" -m hemispheres.evaluate --run runs/latent-a --checkpoint final --data data/world-b --sets all --n 300 --seed 0
 "$PYTHON" -m hemispheres.evaluate --run runs/latent-a --checkpoint final --data data/world-c --sets all --n 300 --seed 0
+"$PYTHON" -m hemispheres.evaluate --run runs/latent-a-all --checkpoint final --data data/world-a --sets test_id,test_ood,test_1hop_ood --n 200 --seed 0
 "$PYTHON" -m hemispheres.evaluate --run runs/latent-a-all --checkpoint final --data data/world-a --edits 100 --n 500 --seed 0
 "$PYTHON" -m hemispheres.evaluate --run runs/latent-a-all --checkpoint final --data data/world-a --edits 1000 --n 500 --seed 0
 "$PYTHON" -m hemispheres.evaluate --run runs/latent-a-all --checkpoint final --data data/world-a --sets test_id,test_1hop_ood --n 300 --seed 0 --store none
 "$PYTHON" -m hemispheres.evaluate --run runs/latent-a-all --checkpoint final --data data/world-a --sets test_id,test_1hop_ood --n 300 --seed 0 --store data/world-c
 "$PYTHON" -m hemispheres.evaluate --run runs/latent-a-all --checkpoint final --data data/world-b --sets all --n 300 --seed 0
 "$PYTHON" -m hemispheres.evaluate --run runs/latent-a-all --checkpoint final --data data/world-c --sets all --n 300 --seed 0
+"$PYTHON" -m hemispheres.evaluate --run runs/latent-multi --checkpoint final --data data/world-a --sets test_id,test_ood,test_1hop_ood --n 200 --seed 0
 "$PYTHON" -m hemispheres.evaluate --run runs/latent-multi --checkpoint final --data data/world-a --edits 100 --n 500 --seed 0
 "$PYTHON" -m hemispheres.evaluate --run runs/latent-multi --checkpoint final --data data/world-a --edits 1000 --n 500 --seed 0
 "$PYTHON" -m hemispheres.evaluate --run runs/latent-multi --checkpoint final --data data/world-a --sets test_id,test_1hop_ood --n 300 --seed 0 --store none
 "$PYTHON" -m hemispheres.evaluate --run runs/latent-multi --checkpoint final --data data/world-a --sets test_id,test_1hop_ood --n 300 --seed 0 --store data/world-c
 "$PYTHON" -m hemispheres.evaluate --run runs/latent-multi --checkpoint final --data data/world-b --sets all --n 300 --seed 0
 "$PYTHON" -m hemispheres.evaluate --run runs/latent-multi --checkpoint final --data data/world-c --sets all --n 300 --seed 0
+"$PYTHON" -m hemispheres.evaluate --run runs/latent-multi-nohop --checkpoint latest --data data/world-a --sets test_id,test_ood,test_1hop_ood --n 200 --seed 0
+"$PYTHON" -m hemispheres.evaluate --run runs/lookup-a --checkpoint final --data data/world-a --sets test_id,test_ood,test_1hop_ood --n 200 --seed 0
 "$PYTHON" -m hemispheres.evaluate --run runs/lookup-a --checkpoint final --data data/world-a --edits 100 --n 500 --seed 0
 "$PYTHON" -m hemispheres.evaluate --run runs/lookup-a --checkpoint final --data data/world-a --edits 1000 --n 500 --seed 0
 "$PYTHON" -m hemispheres.evaluate --run runs/lookup-a --checkpoint final --data data/world-a --sets test_id,test_1hop_ood --n 300 --seed 0 --store none
 "$PYTHON" -m hemispheres.evaluate --run runs/lookup-a --checkpoint final --data data/world-a --sets test_id,test_1hop_ood --n 300 --seed 0 --store data/world-c
 "$PYTHON" -m hemispheres.evaluate --run runs/lookup-a --checkpoint final --data data/world-b --sets all --n 300 --seed 0
 "$PYTHON" -m hemispheres.evaluate --run runs/lookup-a --checkpoint final --data data/world-c --sets all --n 300 --seed 0
+"$PYTHON" -m hemispheres.evaluate --run runs/dense-a-k100 --checkpoint final --data data/world-a --edits 100 --n 500 --seed 0
+"$PYTHON" -m hemispheres.evaluate --run runs/dense-a-to-b --checkpoint final --data data/world-b --sets all --n 300 --seed 0
 
 # 4. Your report, to diff against results/step1/REPORT.md
 "$PYTHON" -m hemispheres.report --runs runs --out repro-step1

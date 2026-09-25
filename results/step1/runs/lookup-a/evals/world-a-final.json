@@ -1,0 +1,79 @@
+{
+  "args": {
+    "run": "runs/lookup-a",
+    "checkpoint": "final",
+    "data": "data/world-a",
+    "edits": 0,
+    "sets": "test_id,test_ood,test_1hop_ood",
+    "n": 200,
+    "seed": 0,
+    "name": null,
+    "store": null
+  },
+  "provenance": {
+    "time": "2026-09-25T14:56:25+00:00",
+    "code": {
+      "commit": "8e40d3a9900d74a96276e400a6c9d51250605fd0",
+      "dirty": true
+    },
+    "env": {
+      "python": "3.12.14",
+      "platform": "macOS-27.0-arm64-arm-64bit",
+      "machine": "arm64",
+      "mlx": "0.32.2",
+      "device": "Device(gpu, 0)"
+    },
+    "data": {
+      "data/world-a": "befab6f0a218e36f48e7ae53539eef4e3fe9fab49eaae9a2d603ee01b86df106"
+    },
+    "checkpoint_sha256": "e06385a28712360487c58accc351cf097ef7d1f94c2b2ea6c33c2da1c0f5cae6"
+  },
+  "summary": {
+    "test_1hop_ood": {
+      "1hop": {
+        "acc": 1.0,
+        "n": 200,
+        "trace_ok": 1.0
+      },
+      "all": {
+        "acc": 1.0,
+        "n": 200,
+        "trace_ok": 1.0
+      }
+    },
+    "test_id": {
+      "2hop": {
+        "acc": 1.0,
+        "n": 200,
+        "trace_ok": 1.0
+      },
+      "3hop": {
+        "acc": 1.0,
+        "n": 200,
+        "trace_ok": 1.0
+      },
+      "all": {
+        "acc": 1.0,
+        "n": 400,
+        "trace_ok": 1.0
+      }
+    },
+    "test_ood": {
+      "2hop": {
+        "acc": 1.0,
+        "n": 200,
+        "trace_ok": 1.0
+      },
+      "3hop": {
+        "acc": 1.0,
+        "n": 200,
+        "trace_ok": 1.0
+      },
+      "all": {
+        "acc": 1.0,
+        "n": 400,
+        "trace_ok": 1.0
+      }
+    }
+  }
+}

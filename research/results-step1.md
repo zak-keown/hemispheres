@@ -25,7 +25,7 @@ All latent runs use hop supervision: an InfoNCE loss on each read layer's query,
 
 ## Main results
 
-Question counts per cell: world A 200 per hop count; 100 edited facts (500 for 1,000 edits); ripple and locality 500 each; worlds B and C 900. The world-A cells and `dense + FT on edits` come from the evaluations logged during training, which kept no per-question records.
+Question counts per cell: world A 200 per hop count; 100 edited facts (500 for 1,000 edits); ripple and locality 500 each; worlds B and C 900. The world-A cells and `dense + FT on edits` were first logged during training without per-question records. They were rerun from the saved checkpoints on 2026-09-25, and all 74 logged cells came out identical.
 
 | | lookup | dense | dense + FT on edits | latent-a | latent-a-all | **latent-multi** |
 |---|---|---|---|---|---|---|
