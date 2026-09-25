@@ -1,0 +1,32 @@
+{
+  "args": {
+    "run": "runs/dense-a",
+    "checkpoint": "final",
+    "data": "data/world-b",
+    "edits": 0,
+    "sets": "all",
+    "n": 300,
+    "seed": 0,
+    "name": null
+  },
+  "summary": {
+    "all": {
+      "1hop": {
+        "acc": 0.01,
+        "n": 300
+      },
+      "2hop": {
+        "acc": 0.0033333333333333335,
+        "n": 300
+      },
+      "3hop": {
+        "acc": 0.02,
+        "n": 300
+      },
+      "all": {
+        "acc": 0.011111111111111112,
+        "n": 900
+      }
+    }
+  }
+}

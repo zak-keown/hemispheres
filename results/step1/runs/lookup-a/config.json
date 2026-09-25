@@ -1,0 +1,44 @@
+{
+  "arm": "lookup",
+  "data": "data/world-a",
+  "out": "runs/lookup-a",
+  "edits": 0,
+  "mix": [
+    [
+      "bios",
+      0.5
+    ],
+    [
+      "qa",
+      0.5
+    ]
+  ],
+  "init": null,
+  "init_checkpoint": "final",
+  "size": "small",
+  "dtype": "float32",
+  "steps": 10000,
+  "batch_size": 64,
+  "seq_len": 256,
+  "lr": 0.001,
+  "min_lr_frac": 0.1,
+  "warmup": 500,
+  "weight_decay": 0.1,
+  "grad_clip": 1.0,
+  "log_every": 100,
+  "eval_every": 2000,
+  "eval_sets": "test_id,test_ood,test_1hop_ood",
+  "eval_n": 200,
+  "save_every": 2000,
+  "seed": 0,
+  "model": {
+    "vocab_size": 576,
+    "n_layer": 8,
+    "n_head": 8,
+    "d_model": 512,
+    "mlp_ratio": 4,
+    "rope_base": 10000.0
+  },
+  "params": 25469440,
+  "vocab": 544
+}

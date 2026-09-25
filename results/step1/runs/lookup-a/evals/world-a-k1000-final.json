@@ -1,0 +1,85 @@
+{
+  "args": {
+    "run": "runs/lookup-a",
+    "checkpoint": "final",
+    "data": "data/world-a",
+    "edits": 1000,
+    "sets": null,
+    "n": 500,
+    "seed": 0,
+    "name": null
+  },
+  "summary": {
+    "direct": {
+      "1hop": {
+        "acc": 1.0,
+        "n": 500,
+        "trace_ok": 1.0
+      },
+      "all": {
+        "acc": 1.0,
+        "n": 500,
+        "trace_ok": 1.0
+      }
+    },
+    "locality": {
+      "1hop": {
+        "acc": 1.0,
+        "n": 91,
+        "trace_ok": 1.0
+      },
+      "2hop": {
+        "acc": 1.0,
+        "n": 175,
+        "trace_ok": 1.0
+      },
+      "3hop": {
+        "acc": 1.0,
+        "n": 234,
+        "trace_ok": 1.0
+      },
+      "all": {
+        "acc": 1.0,
+        "n": 500,
+        "trace_ok": 1.0
+      }
+    },
+    "ripple": {
+      "2hop": {
+        "acc": 1.0,
+        "n": 167,
+        "trace_ok": 1.0
+      },
+      "3hop": {
+        "acc": 1.0,
+        "n": 333,
+        "trace_ok": 1.0
+      },
+      "all": {
+        "acc": 1.0,
+        "n": 500,
+        "trace_ok": 1.0
+      },
+      "changed": {
+        "acc": 1.0,
+        "n": 500,
+        "trace_ok": 1.0
+      },
+      "edit_hop0": {
+        "acc": 1.0,
+        "n": 126,
+        "trace_ok": 1.0
+      },
+      "edit_hop1": {
+        "acc": 1.0,
+        "n": 247,
+        "trace_ok": 1.0
+      },
+      "edit_hop2": {
+        "acc": 1.0,
+        "n": 127,
+        "trace_ok": 1.0
+      }
+    }
+  }
+}

@@ -6,7 +6,7 @@ Start with [`research/BRIEF.md`](research/BRIEF.md). It covers prior art, the ga
 
 ## Results so far (step 1: synthetic worlds)
 
-Exact-match accuracy in %, 300–900 questions per cell. All models are ~29M parameters, trained from scratch for 10k steps on an M5 Max. Full numbers, setup and caveats are in [`research/results-step1.md`](research/results-step1.md).
+Exact-match accuracy in %, 89–900 questions per cell (200 per hop count on world A). Models have 25.5M (baselines) or 29.2M (latent) parameters, trained from scratch for 10k steps on an M5 Max. Setup and caveats are in [`research/results-step1.md`](research/results-step1.md). Every number is regenerated from committed run records by [`results/step1/REPORT.md`](results/step1/REPORT.md), which gives each cell's question count, 95% interval and source file (see [Checking the results](#checking-the-results)).
 
 | Test | dense | dense + fine-tune on edits | lookup | **latent** |
 |---|---|---|---|---|
@@ -39,8 +39,9 @@ Exact-match accuracy in %, 300–900 questions per cell. All models are ~29M par
 
 ### What failed, and the caveats
 
-- **Without per-hop retrieval labels, the latent arm never learns to retrieve.** Every `latent` result above uses a training loss that tells each read layer which fact to fetch. With that loss switched off, retrieval stayed at chance (0.0016%) after 3,100 steps and the run was stopped. The labels come free with any training data generated from the knowledge base, but whether they're needed throughout training, or only to get retrieval started, is the next experiment.
+- **Without per-hop retrieval labels, the latent arm never learns to retrieve.** Every `latent` result above uses a training loss that tells each read layer which fact to fetch. With that loss switched off, retrieval stayed at chance (0.0016%) after 3,300 steps and the run was stopped. The labels come free with any training data generated from the knowledge base, but whether they're needed throughout training, or only to get retrieval started, is the next experiment.
 - **The first latent model scored 42% on unseen world B.** It retrieved the right fact but misspelled names it had never seen, completing them from world-A spelling patterns. Supervising retrieval at every name token raised this to 86%. Training across 16 worlds raised it to 100%.
+- **Models trained on world A alone can't write answer values world A never uses.** All 4 of `lookup`'s world-B misses are currencies (shilling, ducat) that no world-A country uses: it looked up the right value, then wrote a different one. `latent-a` and `latent-a-all` miss the same 4. Multi-world training fixes this too.
 - **The in-context oracle arm (`context`) is broken:** 8–15% on 1-hop questions. It's left out of the table until it's fixed.
 - **This is a toy.** Questions use fixed templates, names match store keys exactly, the store is always complete and correct, and no question needs more hops than the model has read layers. The latent arm has 14% more parameters than the baselines, and the only edit baseline is naive fine-tuning, not MEMIT or AlphaEdit.
 
@@ -59,6 +60,8 @@ Exact-match accuracy in %, 300–900 questions per cell. All models are ~29M par
 | `bench/throughput.py` | Training-throughput benchmark; sizes every experiment |
 | `bench/latent_profile.py` | Where a latent-arm training step spends its time |
 | `results/` | Benchmark outputs (JSON + Markdown) |
+| `results/step1/` | Step-1 run records (configs, metrics, per-question eval outputs, checkpoint and data hashes), the generated comparison report and `reproduce.sh` |
+| `hemispheres/records.py`, `report.py`, `provenance.py` | Export run records, rebuild the report from them, and fingerprint code, data and weights |
 
 ## Setup
 
@@ -70,6 +73,29 @@ python3.12 -m venv .venv
 .venv/bin/python -m pytest -q tests
 HEMI_DEVICE=cpu .venv/bin/python -m pytest -q tests   # leave the GPU free for training
 ```
+
+## Checking the results
+
+`runs/` and `data/` are git-ignored: checkpoints are ~100 MB each, and worlds rebuild deterministically in seconds. The checkpoints are on the Hugging Face Hub at [`hemisphere-llm/hemispheres-step1`](https://huggingface.co/hemisphere-llm/hemispheres-step1). What the results depend on is committed under [`results/step1/`](results/step1/):
+
+- `runs/<run>/config.json`: every training flag, the seed and the model shape.
+- `runs/<run>/metrics.jsonl` and `stdout.log`: the training log, including the evaluations run during training.
+- `runs/<run>/evals/*.json` and `*.jsonl`: each evaluation's arguments and summary, plus one record per question with the model's full output.
+- `runs/<run>/provenance.json`: sha256 of every checkpoint, the fingerprint of every world the run read, and the code version.
+- `worlds.json`: each world's build config and file hashes.
+- `weights.json`: the Hub repo and commit holding each run's checkpoints.
+
+`REPORT.md` and `reproduce.sh` are generated from these records. The report tool uses only the standard library, so checking needs Python 3.11+ but no MLX or Apple hardware:
+
+```sh
+python -m hemispheres.report --check     # recount every table from the records; fail if REPORT.md is stale
+python -m hemispheres.records verify-data data/world-a   # a rebuilt world is byte-identical to the one used
+pip install -e '.[hub]' && python -m hemispheres.records fetch latent-multi   # our weights, sha256-checked, into runs/
+results/step1/reproduce.sh               # rebuild, retrain and re-evaluate everything (~10 GPU-hours on an M5 Max)
+python -m hemispheres.report --runs runs --out repro-step1   # the same report from your runs, to diff
+```
+
+New runs record the git commit, environment and data fingerprints themselves. After a run, publish its records with `python -m hemispheres.records export runs/<run>` and its weights with `python -m hemispheres.records upload runs/<run>` (needs a Hub token with write access), then run `python -m hemispheres.report`.
 
 ## Throughput benchmark
 

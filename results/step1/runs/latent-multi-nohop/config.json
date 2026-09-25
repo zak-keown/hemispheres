@@ -1,0 +1,55 @@
+{
+  "arm": "latent",
+  "data": "data/world-a,data/pool/w3-s0,data/pool/w3-s1,data/pool/w3-s2,data/pool/w4-s0,data/pool/w4-s1,data/pool/w4-s2,data/pool/w5-s0,data/pool/w5-s1,data/pool/w5-s2,data/pool/w6-s0,data/pool/w6-s1,data/pool/w6-s2,data/pool/w7-s0,data/pool/w7-s1,data/pool/w7-s2",
+  "out": "runs/latent-multi-nohop",
+  "edits": 0,
+  "mix": [
+    [
+      "bios",
+      0.5
+    ],
+    [
+      "qa",
+      0.5
+    ]
+  ],
+  "init": null,
+  "init_checkpoint": "final",
+  "size": "small",
+  "dtype": "float32",
+  "steps": 10000,
+  "batch_size": 64,
+  "seq_len": 256,
+  "lr": 0.001,
+  "min_lr_frac": 0.1,
+  "warmup": 500,
+  "weight_decay": 0.1,
+  "grad_clip": 1.0,
+  "log_every": 100,
+  "eval_every": 2000,
+  "eval_sets": "test_id,test_ood,test_1hop_ood",
+  "eval_n": 200,
+  "save_every": 2000,
+  "seed": 0,
+  "n_reads": 3,
+  "top_k": 4,
+  "hop_weight": 0.0,
+  "max_supervision": 1024,
+  "supervise": "all",
+  "model_type": "latent",
+  "model": {
+    "vocab_size": 576,
+    "n_layer": 8,
+    "n_head": 8,
+    "d_model": 512,
+    "mlp_ratio": 4,
+    "rope_base": 10000.0,
+    "n_reads": 3,
+    "top_k": 4,
+    "key_dim": 128,
+    "retrieval_chunk": 2048,
+    "retrieval_group": 256
+  },
+  "params": 29157915,
+  "vocab": 544
+}

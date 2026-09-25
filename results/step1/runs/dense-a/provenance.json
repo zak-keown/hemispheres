@@ -1,0 +1,22 @@
+{
+  "code": {
+    "commit": "2858beb6454560e9cb4b39394f1ab15d8ccd0b70",
+    "dirty": null,
+    "started": "2026-09-23T18:04:44+00:00",
+    "note": "not recorded at training time: the last commit before the run started; the working tree may have had uncommitted changes"
+  },
+  "checkpoints": {
+    "final": {
+      "sha256": "81e8eb4ac912ffa30fb962977a00297083214f9b75b3bf46a818ef8e058f664b",
+      "bytes": 101882492
+    },
+    "latest": {
+      "sha256": "81e8eb4ac912ffa30fb962977a00297083214f9b75b3bf46a818ef8e058f664b",
+      "bytes": 101882492
+    }
+  },
+  "data": {
+    "data/world-a": "befab6f0a218e36f48e7ae53539eef4e3fe9fab49eaae9a2d603ee01b86df106",
+    "data/world-b": "50834522443f999a571ee256c020ea98b336422e34fc14775adbe9805d880818"
+  }
+}

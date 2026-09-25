@@ -1,6 +1,6 @@
 # Step 1 results: synthetic-world toy
 
-*2026-09-23. All runs on an M5 Max (MLX 0.32.2, fp32). Code at `d98359c`, plus `--store` in `evaluate.py`. Runs live in `runs/` (git-ignored); every number here comes from their `evals/*.json`.*
+*2026-09-23. All runs on an M5 Max (MLX 0.32.2, fp32). Each run's records are in [`results/step1/runs/`](../results/step1/runs/). [`results/step1/REPORT.md`](../results/step1/REPORT.md) regenerates every table below from them, with question counts, 95% intervals, source files and the code version of each run.*
 
 ## Setup
 
@@ -25,7 +25,7 @@ All latent runs use hop supervision: an InfoNCE loss on each read layer's query,
 
 ## Main results
 
-Question counts per cell: world A 300–400, edits 500, worlds B and C 900.
+Question counts per cell: world A 200 per hop count; 100 edited facts (500 for 1,000 edits); ripple and locality 500 each; worlds B and C 900. The world-A cells and `dense + FT on edits` come from the evaluations logged during training, which kept no per-question records.
 
 | | lookup | dense | dense + FT on edits | latent-a | latent-a-all | **latent-multi** |
 |---|---|---|---|---|---|---|
@@ -53,7 +53,10 @@ In `latent-a`, retrieval on world B was already 100% at every hop. Answers faile
 | universities | 4 | 77 | 100 |
 | cities | 11 | 69 | 100 |
 | countries | 4 | 66 | 100 |
+| currencies | 78 | 78 | 100 |
 | single-token values (years, majors, industries) | 100 | 100 | 100 |
+
+The currency misses are all the shilling and the ducat, which no world-A country uses. A model trained on world A alone never writes them, and `lookup-a` misses the same 4 of 18 even though its lookup returns the right value.
 
 The model copied the first name token from the retrieved fact and completed the name from world-A spelling patterns, e.g. gold "Boru Krestizor", output "Boru Vizi". Two changes fixed it:
 
@@ -75,16 +78,16 @@ Every store-based model falls to chance without its store, including `latent-a`,
 
 ## Hop supervision is necessary
 
-`latent-multi-nohop` repeats `latent-multi` with `--hop-weight 0`: nothing tells a read layer which fact to fetch, so retrieval can only be learned from the next-token loss. It was stopped at step 3,100 of 10,000 because nothing had emerged.
+`latent-multi-nohop` repeats `latent-multi` with `--hop-weight 0`: nothing tells a read layer which fact to fetch, so retrieval can only be learned from the next-token loss. It was stopped at step 3,300 of 10,000 because nothing had emerged.
 
 | | latent-multi (hop weight 0.5) | latent-multi-nohop (hop weight 0) |
 |---|---|---|
 | Retrieval top-1, hops 1 / 2 / 3, step 500 | 97 / 45 / 1.5 | 0 / 0 / 0 |
 | Retrieval top-1, hops 1 / 2 / 3, step 3,000 | 99.8 / 98.7 / 98.6 | 0.001 / 0.01 / 0.16 |
 | Training loss, step 3,000 | 0.51 | 1.13 (flat since step ~2,000) |
-| World A at step 2,000: 1 / 2 / 3 hop | ~100 | 8 / 5.5 / 6.5 |
+| World A held-out people at step 2,000: 1 / 2 / 3 hop | 94.5 / 86 / 90.5 | 8 / 6 / 4 |
 
-Retrieval stays at chance (1 in 62.6k is 0.0016%). The model ignores the store and does worse than `dense-a`, because world A is only a sixteenth of its training data, so it can't memorize it either. The unused InfoNCE loss, logged but not trained on, rose from 11 to ~90: queries and keys grow without lining up.
+Retrieval stays at chance (1 in 62.6k is 0.0016%). The model ignores the store and does worse than `dense-a`, because world A is only a sixteenth of its training data, so it can't memorize it either. The unused InfoNCE loss, logged but not trained on, rose from 11 to a peak of 113 at step 1,700 (79 at step 3,000): queries and keys grow without lining up.
 
 The likely cause is the hard top-k. Each read keeps 4 of 62.6k entries, and the retrieval score gets gradient only through the entries it keeps. At initialization the right fact almost never makes the top 4, so its score is never pushed up. This is the standard cold-start problem of learned retrieval (REALM pretrains its retriever for this reason), so more steps would not have fixed it.
 

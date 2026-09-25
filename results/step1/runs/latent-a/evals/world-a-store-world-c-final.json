@@ -1,0 +1,39 @@
+{
+  "args": {
+    "run": "runs/latent-a",
+    "checkpoint": "final",
+    "data": "data/world-a",
+    "edits": 0,
+    "sets": "test_id,test_1hop_ood",
+    "n": 300,
+    "seed": 0,
+    "name": null,
+    "store": "data/world-c"
+  },
+  "summary": {
+    "test_1hop_ood": {
+      "1hop": {
+        "acc": 0.016666666666666666,
+        "n": 300
+      },
+      "all": {
+        "acc": 0.016666666666666666,
+        "n": 300
+      }
+    },
+    "test_id": {
+      "2hop": {
+        "acc": 0.0033333333333333335,
+        "n": 300
+      },
+      "3hop": {
+        "acc": 0.02,
+        "n": 300
+      },
+      "all": {
+        "acc": 0.011666666666666667,
+        "n": 600
+      }
+    }
+  }
+}

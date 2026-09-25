@@ -31,7 +31,7 @@ from pathlib import Path
 
 import mlx.core as mx
 
-from . import checkpoint
+from . import checkpoint, provenance
 from .data import ARMS, WorldData
 from .generate import generate
 from .store import Store
@@ -215,6 +215,16 @@ def evaluate(model, tok: Tokenizer, data: WorldData, arm: str, sets: list[str], 
     return summarize(records), records
 
 
+def write(out: Path, name: str, summary: dict, records: list[dict], **meta) -> Path:
+    """<out>/<name>.json (summary and `meta`) and <out>/<name>.jsonl (one record per question)."""
+    out.mkdir(parents=True, exist_ok=True)
+    (out / f"{name}.json").write_text(json.dumps({**meta, "summary": summary}, indent=2))
+    with open(out / f"{name}.jsonl", "w") as f:
+        for r in records:
+            f.write(json.dumps(r) + "\n")
+    return out / name
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--run", required=True)
@@ -248,13 +258,11 @@ def main() -> None:
 
     store_tag = f"-store-{Path(args.store).name}" if args.store else ""
     name = args.name or f"{data.path.name}{f'-k{args.edits}' if args.edits else ''}{store_tag}-{args.checkpoint}"
-    out = Path(args.run) / "evals"
-    out.mkdir(exist_ok=True)
-    (out / f"{name}.json").write_text(json.dumps({"args": vars(args), "summary": summary}, indent=2))
-    with open(out / f"{name}.jsonl", "w") as f:
-        for r in records:
-            f.write(json.dumps(r) + "\n")
-    print(f"wrote {out / name}.json")
+    weights = Path(args.run) / "checkpoints" / args.checkpoint / "model.safetensors"
+    prov = {**provenance.record([args.data] + ([args.store] if store_override not in (None, "none") else [])),
+            "checkpoint_sha256": provenance.sha256(weights)}
+    path = write(Path(args.run) / "evals", name, summary, records, args=vars(args), provenance=prov)
+    print(f"wrote {path}.json")
 
 
 if __name__ == "__main__":

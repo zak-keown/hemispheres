@@ -1,0 +1,92 @@
+{
+  "repo": "hemisphere-llm/hemispheres-step1",
+  "runs": {
+    "context-a": {
+      "final": {
+        "path": "context-a/checkpoints/final/model.safetensors",
+        "sha256": "ae48aaa6bc50869386a3a0892576d33c5a69ca5fda2dc4c396a36d525ee18d20"
+      },
+      "latest": {
+        "path": "context-a/checkpoints/final/model.safetensors",
+        "sha256": "ae48aaa6bc50869386a3a0892576d33c5a69ca5fda2dc4c396a36d525ee18d20"
+      }
+    },
+    "dense-a": {
+      "final": {
+        "path": "dense-a/checkpoints/final/model.safetensors",
+        "sha256": "81e8eb4ac912ffa30fb962977a00297083214f9b75b3bf46a818ef8e058f664b"
+      },
+      "latest": {
+        "path": "dense-a/checkpoints/final/model.safetensors",
+        "sha256": "81e8eb4ac912ffa30fb962977a00297083214f9b75b3bf46a818ef8e058f664b"
+      }
+    },
+    "dense-a-k100": {
+      "final": {
+        "path": "dense-a-k100/checkpoints/final/model.safetensors",
+        "sha256": "c2535e281e08a12dedf5393cd7181be208ff86893980d42800bf627792df93ca"
+      },
+      "latest": {
+        "path": "dense-a-k100/checkpoints/final/model.safetensors",
+        "sha256": "c2535e281e08a12dedf5393cd7181be208ff86893980d42800bf627792df93ca"
+      }
+    },
+    "dense-a-to-b": {
+      "final": {
+        "path": "dense-a-to-b/checkpoints/final/model.safetensors",
+        "sha256": "17c630e69033c07ee975c8290cce6f41127b2563355ae9bd7b2ecbd6118391c2"
+      },
+      "latest": {
+        "path": "dense-a-to-b/checkpoints/final/model.safetensors",
+        "sha256": "17c630e69033c07ee975c8290cce6f41127b2563355ae9bd7b2ecbd6118391c2"
+      }
+    },
+    "latent-a": {
+      "final": {
+        "path": "latent-a/checkpoints/final/model.safetensors",
+        "sha256": "f4f3b1fbe96a1e08b0cc384a7df6b2e4da7555eb3c4f029206b97845ca42eff0"
+      },
+      "latest": {
+        "path": "latent-a/checkpoints/final/model.safetensors",
+        "sha256": "f4f3b1fbe96a1e08b0cc384a7df6b2e4da7555eb3c4f029206b97845ca42eff0"
+      }
+    },
+    "latent-a-all": {
+      "final": {
+        "path": "latent-a-all/checkpoints/final/model.safetensors",
+        "sha256": "57dc7d12714c6cab67037e738530b73f70497f7d2598072be1b7d4471ebcdeaa"
+      },
+      "latest": {
+        "path": "latent-a-all/checkpoints/final/model.safetensors",
+        "sha256": "57dc7d12714c6cab67037e738530b73f70497f7d2598072be1b7d4471ebcdeaa"
+      }
+    },
+    "latent-multi": {
+      "final": {
+        "path": "latent-multi/checkpoints/final/model.safetensors",
+        "sha256": "1b2490e51d93fc40eef41d5e997f714651b1417d52d7d4d2b811833471b51a61"
+      },
+      "latest": {
+        "path": "latent-multi/checkpoints/final/model.safetensors",
+        "sha256": "1b2490e51d93fc40eef41d5e997f714651b1417d52d7d4d2b811833471b51a61"
+      }
+    },
+    "latent-multi-nohop": {
+      "latest": {
+        "path": "latent-multi-nohop/checkpoints/latest/model.safetensors",
+        "sha256": "dc2494c3833662fbc63b627bd5587866ad0c8d67818ec9325d2f951b9e944259"
+      }
+    },
+    "lookup-a": {
+      "final": {
+        "path": "lookup-a/checkpoints/final/model.safetensors",
+        "sha256": "e06385a28712360487c58accc351cf097ef7d1f94c2b2ea6c33c2da1c0f5cae6"
+      },
+      "latest": {
+        "path": "lookup-a/checkpoints/final/model.safetensors",
+        "sha256": "e06385a28712360487c58accc351cf097ef7d1f94c2b2ea6c33c2da1c0f5cae6"
+      }
+    }
+  },
+  "revision": "85ef63c79d6a0ffcac769e2e04fc1cee28491324"
+}

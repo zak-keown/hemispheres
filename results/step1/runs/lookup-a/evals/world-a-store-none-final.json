@@ -1,0 +1,44 @@
+{
+  "args": {
+    "run": "runs/lookup-a",
+    "checkpoint": "final",
+    "data": "data/world-a",
+    "edits": 0,
+    "sets": "test_id,test_1hop_ood",
+    "n": 300,
+    "seed": 0,
+    "name": null,
+    "store": "none"
+  },
+  "summary": {
+    "test_1hop_ood": {
+      "1hop": {
+        "acc": 0.0,
+        "n": 300,
+        "trace_ok": 0.9733333333333334
+      },
+      "all": {
+        "acc": 0.0,
+        "n": 300,
+        "trace_ok": 0.9733333333333334
+      }
+    },
+    "test_id": {
+      "2hop": {
+        "acc": 0.0,
+        "n": 300,
+        "trace_ok": 0.0
+      },
+      "3hop": {
+        "acc": 0.0,
+        "n": 300,
+        "trace_ok": 0.0
+      },
+      "all": {
+        "acc": 0.0,
+        "n": 600,
+        "trace_ok": 0.0
+      }
+    }
+  }
+}

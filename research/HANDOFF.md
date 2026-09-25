@@ -5,7 +5,7 @@ Read this first, then `research/results-step1.md` (all numbers) and `research/BR
 ## Where things stand
 
 - **Step 1 (synthetic-world toy) is done.** The latent arm reads a fact store inside its forward pass. With per-hop retrieval labels during training, it answers 1–3-hop questions at 100% on unseen worlds and after 1,000 edits, and holds almost no facts itself.
-- **New today: hop supervision is necessary.** `latent-multi-nohop` (`--hop-weight 0`) was stopped at step 3,100 of 10,000. Retrieval stayed at chance (1 in 62.6k) and the loss plateaued at 1.13, against 0.51 with hop supervision. The likely cause is the hard top-k cold start: the right fact is never retrieved, so its score gets no gradient. Details are in the "Hop supervision is necessary" section of `results-step1.md`.
+- **New today: hop supervision is necessary.** `latent-multi-nohop` (`--hop-weight 0`) was stopped at step 3,300 of 10,000. Retrieval stayed at chance (1 in 62.6k) and the loss plateaued at 1.13, against 0.51 with hop supervision. The likely cause is the hard top-k cold start: the right fact is never retrieved, so its score gets no gradient. Details are in the "Hop supervision is necessary" section of `results-step1.md`.
 - **The question now** is how much hop supervision the model needs. The labels come free with any training data generated from the knowledge base (as in KBLaM and LMLM), so needing them is not fatal. What matters is whether they're needed only to get retrieval started, and whether retrieval learned on templates carries over to other phrasing.
 
 ## Git
@@ -46,6 +46,7 @@ echo "=== eval $run $(date +%H:%M:%S)"
 for w in world-b world-c; do $PY -m hemispheres.evaluate --run runs/$run --data data/$w --sets all --n 300 2>&1 | q | sed -n 1,2p; done
 for k in 100 1000; do $PY -m hemispheres.evaluate --run runs/$run --data data/world-a --edits $k --n 500 2>&1 | q | sed -n 1,4p; done
 $PY -m hemispheres.evaluate --run runs/$run --data data/world-a --sets test_id,test_1hop_ood --n 300 --store none 2>&1 | q | sed -n 1,3p
+$PY -m hemispheres.records export runs/$run && $PY -m hemispheres.records upload runs/$run && $PY -m hemispheres.report
 echo "HOP2K DONE $(date +%H:%M:%S)"
 ```
 
@@ -56,6 +57,30 @@ To watch progress, read `runs/latent-multi-hop2k/metrics.jsonl`, which holds `re
 - **Retrieval holds at ~100% and worlds B and C stay at ~100%:** the labels are only needed to get retrieval started, so a short warm-up on data generated from the knowledge base is enough. Go to the harder toy.
 - **Retrieval drifts down after step 2,000:** the model needs the labels throughout training. Then try the small, growing store (below) or keep a small hop weight.
 - **Either way:** compare with `latent-multi` (`runs/latent-multi/metrics.jsonl`, `evals/`) and add a row to `results-step1.md`.
+
+## Backfill: per-question records for the † cells (not started, ~15 min of GPU)
+
+`results/step1/REPORT.md` marks 29 cells with †. They come from summaries logged during training: the world-A held-out results, `dense-a-k100` and `dense-a-to-b`. Those evaluations kept no per-question records. These evaluations use the same checkpoints and the same question sample (`split_questions` seeds on split and seed), so they should reproduce the logged numbers exactly. If a number changes, say so; don't just regenerate the docs. Run the queue only when the GPU is idle:
+
+```zsh
+PY=.venv/bin/python; q() { grep --line-buffered -v MallocStackLogging; }
+for r in lookup-a dense-a context-a latent-a latent-a-all latent-multi; do
+  $PY -m hemispheres.evaluate --run runs/$r --data data/world-a --sets test_id,test_ood,test_1hop_ood --n 200 2>&1 | q | sed -n 1,4p
+done
+$PY -m hemispheres.evaluate --run runs/latent-multi-nohop --checkpoint latest --data data/world-a --sets test_id,test_ood,test_1hop_ood --n 200 2>&1 | q | sed -n 1,4p
+$PY -m hemispheres.evaluate --run runs/dense-a-k100 --data data/world-a --edits 100 --n 500 2>&1 | q | sed -n 1,4p
+$PY -m hemispheres.evaluate --run runs/dense-a-to-b --data data/world-b --sets all --n 300 2>&1 | q | sed -n 1,2p
+$PY -m hemispheres.records export runs/{lookup-a,dense-a,context-a,latent-a,latent-a-all,latent-multi,latent-multi-nohop,dense-a-k100,dense-a-to-b}
+$PY -m hemispheres.report && git diff --stat results/step1/REPORT.md
+```
+
+## Records
+
+- **Every step-1 number traces to committed records** in `results/step1/`: configs, metrics, logs, per-question evaluation outputs, checkpoint hashes and world fingerprints.
+- **`REPORT.md` and `reproduce.sh` are generated** by `python -m hemispheres.report`. `tests/test_records.py` fails if they're stale.
+- **Weights** are on the Hub at `hemisphere-llm/hemispheres-step1` (private for now). `results/step1/weights.json` pins the commit. `records fetch <run>` downloads a run and checks each file's hash.
+- **After every new run or evaluation**, run `python -m hemispheres.records export runs/<run>`. After a new run, also run `records upload runs/<run>` (it needs `pip install -e '.[hub]'` and the `HF_TOKEN`). Then run `python -m hemispheres.report`.
+- **Runs now record themselves:** the git commit (and whether the tree was dirty), environment and data fingerprints go in `config.json` and each eval's `.json`. The evaluations run during training also save their per-question records to `evals/<world>-step<N>.jsonl`.
 
 ## After that, in order
 
@@ -86,6 +111,6 @@ To watch progress, read `runs/latent-multi-hop2k/metrics.jsonl`, which holds `re
 - **Runs on disk:**
   - `lookup-a`, `dense-a`, `dense-a-k100`, `dense-a-to-b`, `context-a`.
   - `latent-a`, `latent-a-all`, `latent-multi`: the headline model.
-  - `latent-multi-nohop`: partial, stopped at step 3,100; checkpoint `latest` at step 2,000.
+  - `latent-multi-nohop`: partial, stopped at step 3,300; checkpoint `latest` at step 2,000.
 - **zsh gotchas:** use `${=VAR}` to word-split a variable. `grep` in a pipe needs `--line-buffered`. Filter the `MallocStackLogging` noise from MLX output.
 - **Speed:** the small latent model trains at about 29k tok/s at batch 64 × 256, so 10k steps take about 95 minutes. It uses about 20 GB of memory.

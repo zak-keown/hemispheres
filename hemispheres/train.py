@@ -36,9 +36,9 @@ import mlx.core as mx
 import mlx.nn as nn
 import mlx.optimizers as optim
 
-from . import checkpoint
+from . import checkpoint, provenance
 from .data import ARMS, ExampleSampler, Packer, WorldData, parse_mix
-from .evaluate import evaluate, format_summary
+from .evaluate import evaluate, format_summary, write
 from .latent import LatentConfig, LatentGPT, latent_loss
 from .model import GPT, SIZES, config_for, masked_lm_loss
 from .store import Store
@@ -95,7 +95,11 @@ def train(args) -> None:
 
     config = {**{k: v for k, v in vars(args).items() if k != "resume"}, "mix": mix,
               "model_type": "latent" if latent else "gpt", "model": asdict(model_cfg),
-              "params": model.num_params(), "vocab": len(tok)}
+              "params": model.num_params(), "vocab": len(tok),
+              "provenance": provenance.record(args.data.split(","))}
+    if args.init:
+        init_weights = Path(args.init) / "checkpoints" / args.init_checkpoint / "model.safetensors"
+        config["provenance"]["init_sha256"] = provenance.sha256(init_weights)
     (run / "config.json").write_text(json.dumps(config, indent=2))  # a resume records its new settings
 
     optimizer = make_optimizer(args)
@@ -147,8 +151,12 @@ def train(args) -> None:
         return loss, lm, hop, hits, counts, grad_norm
 
     def run_eval(step: int) -> None:
-        summary, _ = evaluate(model, tok, data, args.arm, args.eval_sets.split(","), args.eval_n, args.seed)
+        sets = args.eval_sets.split(",")
+        summary, records = evaluate(model, tok, data, args.arm, sets, args.eval_n, args.seed)
         log(run, {"step": step, "eval": summary})
+        write(run / "evals", f"{data.path.name}{f'-k{args.edits}' if args.edits else ''}-step{step}", summary, records,
+              args={"data": str(data.path), "edits": args.edits, "sets": args.eval_sets, "n": args.eval_n,
+                    "seed": args.seed, "step": step})
         print(format_summary(summary))
 
     print(f"{args.arm}: {model.num_params() / 1e6:.1f}M params, {len(tok)} tokens, mix {mix}, "

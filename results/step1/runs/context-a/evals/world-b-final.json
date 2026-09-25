@@ -1,0 +1,32 @@
+{
+  "args": {
+    "run": "runs/context-a",
+    "checkpoint": "final",
+    "data": "data/world-b",
+    "edits": 0,
+    "sets": "all",
+    "n": 300,
+    "seed": 0,
+    "name": null
+  },
+  "summary": {
+    "all": {
+      "1hop": {
+        "acc": 0.08333333333333333,
+        "n": 300
+      },
+      "2hop": {
+        "acc": 0.13666666666666666,
+        "n": 300
+      },
+      "3hop": {
+        "acc": 0.13333333333333333,
+        "n": 300
+      },
+      "all": {
+        "acc": 0.11777777777777777,
+        "n": 900
+      }
+    }
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "arm": "dense",
+  "data": "data/world-a",
+  "out": "runs/dense-a-k100",
+  "edits": 100,
+  "mix": [
+    [
+      "edit_facts",
+      1.0
+    ],
+    [
+      "edit_qa",
+      1.0
+    ]
+  ],
+  "init": "runs/dense-a",
+  "init_checkpoint": "final",
+  "size": "small",
+  "dtype": "float32",
+  "steps": 200,
+  "batch_size": 64,
+  "seq_len": 256,
+  "lr": 0.0003,
+  "min_lr_frac": 0.1,
+  "warmup": 20,
+  "weight_decay": 0.1,
+  "grad_clip": 1.0,
+  "log_every": 100,
+  "eval_every": 200,
+  "eval_sets": "direct,ripple,locality",
+  "eval_n": 500,
+  "save_every": 0,
+  "seed": 0,
+  "model": {
+    "vocab_size": 576,
+    "n_layer": 8,
+    "n_head": 8,
+    "d_model": 512,
+    "mlp_ratio": 4,
+    "rope_base": 10000.0
+  },
+  "params": 25469440,
+  "vocab": 544
+}

@@ -28,6 +28,7 @@ import random
 from collections import Counter
 from pathlib import Path
 
+from .. import provenance
 from . import render
 from .edits import edit_eval_set, sample_edits
 from .schema import ENTITY_TYPES, RELATIONS, vocabulary
@@ -143,6 +144,7 @@ def main() -> None:
     (out / "samples.txt").write_text(samples_text(world, splits, args.seed))
     st = stats(world, splits, args.seed)
     st["config"] = vars(args)
+    st["code"] = provenance.code_version()
 
     counts = sorted(int(k) for k in args.edits.split(",") if k)
     if counts:
